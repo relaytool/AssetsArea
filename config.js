@@ -7,7 +7,9 @@ window.STOCK_AREA_CONFIG = Object.freeze({
   ACTIVITY_TAB: 'Area Activity',           // preserved: movement history
   SETTINGS_TAB: 'Area Settings',           // preserved: legacy row count
   AREAS_TAB: 'Warehouse Areas',            // new: editable floor plan
-  STOCK_TAB: 'Warehouse Stock',            // new: multiple assets per area
+  STOCK_TAB: 'Warehouse Stock',
+  BLOCK_SETTINGS_TAB: 'Warehouse Block Settings',
+  BLOCK_STOCK_TAB: 'Warehouse Block Stock',            // new: multiple assets per area
   BOARD_COLUMNS: 16,
   BOARD_MIN_ROWS: 10,
   BOARD_MAX_ROWS: 80

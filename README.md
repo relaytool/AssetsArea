@@ -1,41 +1,55 @@
-# Assets Area — warehouse layout
+# Assets Area — nested warehouse storage blocks
 
-Static GitHub Pages site backed by Google Sheets. No server or build step is required.
+This is the updated GitHub Pages project. It adds an independent, two-column **A / B storage-block map inside each warehouse area**, based on the original Assets Area layout. Everything remains in the browser; live data is in Google Sheets.
 
-## Publish
+## Deploy
 
-Upload `index.html`, `styles.css`, `app.js`, and `config.js` together to the existing GitHub Pages repository. The spreadsheet ID, existing Google OAuth client ID, and owner account are preserved in `config.js`.
+Replace these files in your GitHub Pages repository, keeping them in the same folder:
 
-## First-time upgrade
+- `index.html`
+- `styles.css`
+- `app.js`
+- `config.js`
 
-1. Keep a backup of the original Google Sheet before upgrading.
-2. Open the website and select **Owner edit**, signing in with the account specified in `config.js`.
-3. Select **Activate warehouse layout**. The site creates `Warehouse Areas` and `Warehouse Stock` tabs and copies the current legacy blocks and their inventories. The existing `Area Positions`, `Area Activity`, and `Area Settings` tabs remain untouched.
-4. Select **Design layout** to drag/resize existing areas and add new holding, staging, loading, aisle, or other areas. Each new area has a stable ID.
-5. Select a holding area to add/remove different assets, move all contents to another area, or empty it (with confirmation). Owners can also long-press a stocked block and drag its contents onto another storage block; matching asset types merge. **Copy area link** produces `?area=AREA-ID` for read-only sharing.
+No Apps Script, build tool, or new Google OAuth client is needed. The configured spreadsheet and owner email remain the same.
 
-The site uses **Warehouse Stock** as the live source of truth after activation. Do not continue editing the old `Area Positions` tab after migrating; edits there will not be reflected in the new layout. Run the activation **once**, and verify counts against the physical inventory before regular operation.
+## Enable nested storage blocks (once)
 
-## Google Sheets access
+1. Backup your existing spreadsheet.
+2. Open the deployed website, select **Owner edit**, and sign in with the configured owner account.
+3. Select **Enable area blocks**. This creates two new tabs if they are missing, while leaving existing tabs, areas and inventory untouched.
+4. Open any holding area. It now shows **A01, B01, A02, B02**, etc. The default is **8 rows per lane** (16 blocks per area). Change the row count between **2 and 30** and select **Save block rows**.
+5. Select a block to view or update its stock. Each block can contain multiple distinct asset types and quantities.
+6. Existing inventory in `Warehouse Stock` appears as **Stock not assigned to a block**. Choose a destination block and select **Move unassigned stock into block** to allocate it without changing quantities.
 
-For an anonymous public view, share the **dedicated warehouse spreadsheet** as **Anyone with the link → Viewer**. Make sure only the owner has **Editor** permission. The website verifies the signed-in Google account is the configured owner before providing edit controls, and Google Sheets API enforces that account's actual file permissions.
+If the prior warehouse upgrade was never activated, select **Activate warehouse layout** first, then **Enable area blocks**.
 
-**Privacy:** All tabs of a publicly shared spreadsheet may be accessible to viewers. Do not put sensitive or private data into this public workbook. If you need private operational sheets, keep those in a different, restricted workbook.
+## Storage and access
 
-## New sheets
+- **Warehouse** → **area** → **storage block** → multiple asset types.
+- Block IDs are scoped by area. For example, `WH-A01/B02` and `WH-B02/B02` are different locations.
+- Open `?area=WH-A01` to see an area and its blocks. Open `?area=WH-A01&block=B02` to open a specific block directly.
+- Open a block to **add**, **remove**, **transfer all to another block**, or **empty the entire block** with confirmation. All actions update Google Sheets and attempt to append to `Area Activity`.
+- **Empty all blocks in this area** clears all nested blocks **and** any unassigned stock, with confirmation.
+- The warehouse overview totals items per asset type, counting both nested blocks and any unassigned inventory, without double-counting.
+- Users with the public link are view-only. Only the configured owner, authorized through Google OAuth and Google Sheets file permissions, can edit data.
 
-| Tab | Columns |
-| --- | --- |
-| `Warehouse Areas` | Area ID, Name, Zone, Type, X, Y, Width, Height, Color, Updated At, Active |
-| `Warehouse Stock` | Area ID, Item, Quantity, Updated At |
-| `Area Activity` (existing) | Timestamp, Action, Item, Quantity, From, To, Note, By |
+## Workbook structure
 
-Area IDs are permanent. Deleting an empty area archives its record (Active = FALSE) so past links are not reassigned. One asset type per row in `Warehouse Stock` allows unlimited different types per area.
+| Sheet | Columns | Purpose |
+| --- | --- | --- |
+| `Warehouse Areas` | Area ID, Name, Zone, Type, X, Y, Width, Height, Color, Updated At, Active | Existing warehouse layout |
+| `Warehouse Stock` | Area ID, Item, Quantity, Updated At | Existing area-level stock, now treated as *unassigned* until allocated |
+| `Warehouse Block Settings` | Area ID, Rows, Updated At | New: row count per area; 8 if absent |
+| `Warehouse Block Stock` | Area ID, Block ID, Item, Quantity, Updated At | New: multiple asset records for each storage block |
+| `Area Activity` | Timestamp, Action, Item, Quantity, From, To, Note, By | Existing audit history |
 
-## Notes
+**Important:** New block tabs are created by the signed-in owner via **Enable area blocks**. They are *not* created by public viewers. If creating them manually, the header names and their order must match the table above exactly. Do not delete `Warehouse Stock` or move its rows without using the app to assign the stock.
 
-- The floor planner uses a 16-column, 80-row maximum grid; empty spaces can represent aisles/roads. Walkways are read-only areas and cannot hold stock.
-- The public viewer refreshes roughly every 90 seconds and when returning to the tab. Manual refresh is also available.
-- Writes use the signed-in owner's Google OAuth token, check current sheet values for changes, and verify saved values before reporting success. The backing spreadsheet itself is not changed until the owner activates the upgrade on the live site.
-- Public users cannot create, remove, move, or edit stock from the website. The live Google Sheets sharing settings must also remain **Viewer** for the public.
-- Google Sheets does not provide transactional row locking: use a single owner editor at a time and refresh if someone else edits the sheet directly.
+## Security and caveats
+
+Share the warehouse spreadsheet as **Anyone with the link → Viewer**, with Editor access restricted to the configured owner. Because a viewer can access all tabs in a publicly shared Google Sheet, keep private information in a separate workbook.
+
+The Google Sheets API has no transactional row locking. The app compares remote values before writes and verifies the result, but if multiple owners edit the same blocks concurrently they should refresh and reconcile changes. Save failures do not silently replace quantities. An activity-log write can fail separately from an inventory write; if that happens, the app warns you after saving stock.
+
+The original legacy tabs, existing warehouse areas, IDs, and existing stock remain unchanged when nested storage is first enabled.

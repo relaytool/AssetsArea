@@ -7,3 +7,20 @@
 .transfer-panel{margin:14px 0 0;padding-top:13px;border-top:1px solid var(--line)}.transfer-panel .field{margin:0 0 10px}
 
 .map-block.stock-dragging{opacity:.55;outline:3px dashed #338c60;outline-offset:1px}.map-block.stock-drop{outline:3px solid #359c6b;outline-offset:1px;box-shadow:0 3px 20px #2d89542c}.map-block.stock-invalid{outline:3px dashed #b75555;outline-offset:1px}
+
+/* Separate A/B storage blocks inside every warehouse area. */
+#blockOverlay{z-index:30}.block-drawer{width:min(100%,480px)}
+.inner-grid-scroll{overflow-x:auto;max-width:100%;border:1px solid #dbe6df;border-radius:13px;background:#f5f8f6;padding:10px}
+.inner-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;min-width:275px}
+.inner-block{display:flex;flex-direction:column;gap:6px;align-items:flex-start;text-align:left;min-height:77px;padding:11px 12px;border:1px solid #c9dfcd;border-radius:11px;background:#e9f5ec;color:#285e40;transition:transform .12s,border-color .12s;overflow-wrap:anywhere}
+.inner-block.lane-b{background:#e9f1fc;border-color:#c5d9ec;color:#315f8d}
+.inner-block.filled{border-left:4px solid #368c63;background:#dff1e4}
+.inner-block.lane-b.filled{border-left-color:#4c81ba;background:#e0ecfa}
+.inner-block:hover{border-color:#34895e;transform:translateY(-1px)}
+.inner-id{font-size:13px;font-weight:850;letter-spacing:.2px}
+.inner-note{font-size:11px;font-weight:500;line-height:1.4;white-space:normal;max-width:100%;overflow-wrap:anywhere}
+.row-settings{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:11px 0 13px}
+.row-settings .field{margin:0;max-width:165px}.row-settings .btn{min-height:43px}
+.legacy-panel{padding:12px 13px;background:#fbf8ec;border:1px solid #ede2be;border-radius:12px;margin-top:17px}
+.legacy-panel .drawer-section-header{margin:4px 0 7px}.legacy-panel .content-row{background:white;margin:7px 0}
+@media(max-width:650px){.inner-block{min-height:69px;padding:9px}.inner-grid{gap:7px}.row-settings .field{max-width:140px}}
