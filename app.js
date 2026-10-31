@@ -68,8 +68,15 @@ async function loadData(show=true){if(loading){queuedLoad=true;return;}loading=t
    if(areas.status==='fulfilled'||stock.status==='fulfilled')notice('Warehouse setup is incomplete. The original storage map is shown until the owner finishes setup.');else notice('The original storage area is shown. The owner can activate the new warehouse layout.');
  }
  if(events.status==='fulfilled'){state.events=parseEvents(events.value);}
-   state.blocksReady=blockSettings.status==='fulfilled'&&blockStock.status==='fulfilled';
-   if(state.blocksReady){state.blockSettings=parseBlockSettings(blockSettings.value);state.blockStock=parseBlockStock(blockStock.value);}else{state.blockSettings=[];state.blockStock=[];if(!state.legacy){const missing=[blockSettings.status!=='fulfilled'?tabs.blockSettings:null,blockStock.status!=='fulfilled'?tabs.blockStock:null].filter(Boolean);notice('Area layout loaded. Block storage unavailable: check the '+missing.join(' and ')+' tab(s). Existing block stock is not shown until these can be read.','error');}}
+   // Parse independently: a missing/empty stock tab must not reset saved area grid dimensions.
+   const blockIssues=[];let settingsOK=false,stockOK=false;
+   if(blockSettings.status==='fulfilled')try{state.blockSettings=parseBlockSettings(blockSettings.value);settingsOK=true;}catch(e){blockIssues.push(`${tabs.blockSettings}: ${e.message}`);}
+   else blockIssues.push(`${tabs.blockSettings}: cannot read tab`);
+   if(blockStock.status==='fulfilled')try{state.blockStock=parseBlockStock(blockStock.value);stockOK=true;}catch(e){blockIssues.push(`${tabs.blockStock}: ${e.message}`);}
+   else blockIssues.push(`${tabs.blockStock}: cannot read tab`);
+   state.blocksReady=settingsOK&&stockOK;
+   if(!state.blocksReady&&!state.legacy){notice('Block setup needs repair. '+blockIssues.join(' · ')+'. Owner: choose Enable area blocks to initialise empty tabs. Existing recorded stock is not changed.','error');}
+
  render();connection(isOwner()?'Owner connected':'Live · view only','live');openFromURL();
  }catch(err){if(state.loaded){notice('Refresh failed: '+(err.message||'Unable to reach Google Sheets')+'. Previously loaded figures may be out of date.','error');connection('Refresh failed','error');}else{notice('Unable to read warehouse data: '+(err.message||'Check Google Sheets permissions and tab names')+'.','error');connection('Not connected','error');if(document.documentElement.classList.contains('area-route')){$('areaLoading').querySelector('strong').textContent='Unable to open this area';$('areaLoading').querySelector('span').textContent='Check the Sheet sharing permissions and reload.';}render();}console.warn('Warehouse refresh:',err);}
  finally{loading=false;if(queuedLoad){queuedLoad=false;loadData(false);}}
@@ -249,12 +256,12 @@ async function enableBlockStorage(){
   const missing=[tabs.blockSettings,tabs.blockStock].filter(x=>!known.has(x));
   if(missing.length)await api(':batchUpdate',{method:'POST',body:JSON.stringify({requests:missing.map(title=>({addSheet:{properties:{title,gridProperties:{rowCount:1000,columnCount:8}}}}))})});
   const settings=await readApiTab(tabs.blockSettings,'A:D'),stock=await readApiTab(tabs.blockStock,'A:E');
-  if(settings.length)verifyBlockSettingsHeader(settings);
-  if(stock.length)verifyApiHeader(stock,BLOCK_STOCK_HEADERS);
+  if(settings.length&&settings[0].some(v=>String(v||'').trim()))verifyBlockSettingsHeader(settings);
+  if(stock.length&&stock[0].some(v=>String(v||'').trim()))verifyApiHeader(stock,BLOCK_STOCK_HEADERS);
   const changes=[];
-  if(!settings.length)changes.push({range:`'${tabs.blockSettings}'!A1:D1`,values:[BLOCK_SETTINGS_HEADERS]});
+  if(!settings.length||!settings[0].some(v=>String(v||'').trim()))changes.push({range:`'${tabs.blockSettings}'!A1:D1`,values:[BLOCK_SETTINGS_HEADERS]});
   else {const upgrade=settingsHeaderUpgrade(settings);if(upgrade)changes.push(upgrade);}
-  if(!stock.length)changes.push({range:`'${tabs.blockStock}'!A1:E1`,values:[BLOCK_STOCK_HEADERS]});
+  if(!stock.length||!stock[0].some(v=>String(v||'').trim()))changes.push({range:`'${tabs.blockStock}'!A1:E1`,values:[BLOCK_STOCK_HEADERS]});
   if(changes.length)await apiWrites(changes);
   const [s,b]=await Promise.all([readApiTab(tabs.blockSettings,'A:D'),readApiTab(tabs.blockStock,'A:E')]);
   verifyBlockSettingsHeader(s);verifyApiHeader(b,BLOCK_STOCK_HEADERS);
@@ -264,7 +271,7 @@ async function enableBlockStorage(){
  finally{busy=false;$('enableBlocks').disabled=false;}
 }
 // Upgrades the previous 3-column settings tab without altering existing row counts or stock.
-function verifyBlockSettingsHeader(rows){if(!rows.length)return;verifyApiHeader(rows,BLOCK_SETTINGS_HEADERS.slice(0,3));settingsHeaders(rows);}
+function verifyBlockSettingsHeader(rows){if(!rows.length)return;settingsHeaders(rows);}
 async function saveBlockGrid(){
  if(!isOwner()||busy||!selectedId||!state.blocksReady)return;
  const id=selectedId,rows=Number($('blockRowCount').value),columns=Number($('blockColumnCount').value),oldRows=blockRows(id),oldColumns=blockColumns(id);
