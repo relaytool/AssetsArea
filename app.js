@@ -7,6 +7,9 @@ const C=Number(cfg.BOARD_COLUMNS)||16,MIN_R=Number(cfg.BOARD_MIN_ROWS)||18,MAX_R
 const AREA_HEADERS=['Area ID','Name','Zone','Type','X','Y','Width','Height','Color','Updated At','Active'];
 const STOCK_HEADERS=['Area ID','Item','Quantity','Updated At'];
 const BLOCK_SETTINGS_HEADERS=['Area ID','Rows','Updated At','Columns'];
+function settingsHeaders(rows){const headers=(rows[0]||[]).map(normalizedHeader);if(!rows.length)return BLOCK_SETTINGS_HEADERS.map(normalizedHeader);if(headers[0]!=='areaid'||headers[1]!=='rows'||!headers.includes('updatedat')||!(headers.includes('columns')||headers.length===3))throw Error('Warehouse Block Settings must have Area ID, Rows, Updated At and Columns headers.');return headers;}
+function settingsRow(headers,id,rows,columns,stamp){return headers.map(h=>h==='areaid'?id:h==='rows'?rows:h==='columns'?columns:h==='updatedat'?stamp:'');}
+function settingsHeaderUpgrade(rows){const h=settingsHeaders(rows);return h.includes('columns')?null:{range:`'${tabs.blockSettings}'!D1`,values:[['Columns']]};}
 const BLOCK_STOCK_HEADERS=['Area ID','Block ID','Item','Quantity','Updated At'];
 const ACTIVITY_HEADERS=['Timestamp','Action','Item','Quantity','From','To','Note','By'];
 const PRESETS=['Red sleeves','Wood Pallets','Magnum Bases','Blue Carbags'];
@@ -59,16 +62,16 @@ async function loadData(show=true){if(loading){queuedLoad=true;return;}loading=t
    state.areas=parseAreas(areas.value);state.stock=parseStock(stock.value);state.legacy=false;state.loaded=true;notice();
  }else{
    const [old,settings]=await Promise.allSettled([gviz(tabs.legacy),gviz(tabs.settings)]);
-   if(old.status!=='fulfilled')throw new Error('The public sheet could not be read.');
+   if(old.status!=='fulfilled')throw new Error('Warehouse Areas / Warehouse Stock could not be read, and the original Area Positions tab is unavailable. Check sheet names and public Viewer access.');
    const legacy=parseLegacy(old.value,settings.status==='fulfilled'?settings.value:null);
    state.areas=legacy.areas;state.stock=legacy.stock;state.legacyAreas=legacy.areas;state.legacyStock=legacy.stock;state.legacy=true;state.loaded=true;
    if(areas.status==='fulfilled'||stock.status==='fulfilled')notice('Warehouse setup is incomplete. The original storage map is shown until the owner finishes setup.');else notice('The original storage area is shown. The owner can activate the new warehouse layout.');
  }
  if(events.status==='fulfilled'){state.events=parseEvents(events.value);}
    state.blocksReady=blockSettings.status==='fulfilled'&&blockStock.status==='fulfilled';
-   if(state.blocksReady){state.blockSettings=parseBlockSettings(blockSettings.value);state.blockStock=parseBlockStock(blockStock.value);}else{state.blockSettings=[];state.blockStock=[];}
+   if(state.blocksReady){state.blockSettings=parseBlockSettings(blockSettings.value);state.blockStock=parseBlockStock(blockStock.value);}else{state.blockSettings=[];state.blockStock=[];if(!state.legacy){const missing=[blockSettings.status!=='fulfilled'?tabs.blockSettings:null,blockStock.status!=='fulfilled'?tabs.blockStock:null].filter(Boolean);notice('Area layout loaded. Block storage unavailable: check the '+missing.join(' and ')+' tab(s). Existing block stock is not shown until these can be read.','error');}}
  render();connection(isOwner()?'Owner connected':'Live · view only','live');openFromURL();
- }catch(err){if(state.loaded){notice('Could not refresh just now. Last loaded data is still visible.','error');connection('Refresh failed','error');}else{notice('Unable to read the warehouse data. Confirm the spreadsheet is shared as “Anyone with the link – Viewer”.','error');connection('Not connected','error');if(document.documentElement.classList.contains('area-route')){$('areaLoading').querySelector('strong').textContent='Unable to open this area';$('areaLoading').querySelector('span').textContent='Check the Sheet sharing permissions and reload.';}render();}console.warn('Warehouse refresh:',err);}
+ }catch(err){if(state.loaded){notice('Refresh failed: '+(err.message||'Unable to reach Google Sheets')+'. Previously loaded figures may be out of date.','error');connection('Refresh failed','error');}else{notice('Unable to read warehouse data: '+(err.message||'Check Google Sheets permissions and tab names')+'.','error');connection('Not connected','error');if(document.documentElement.classList.contains('area-route')){$('areaLoading').querySelector('strong').textContent='Unable to open this area';$('areaLoading').querySelector('span').textContent='Check the Sheet sharing permissions and reload.';}render();}console.warn('Warehouse refresh:',err);}
  finally{loading=false;if(queuedLoad){queuedLoad=false;loadData(false);}}
 }
 function render(){const owner=isOwner();$('modePill').textContent=owner?'OWNER EDIT':'VIEW ONLY';$('modePill').classList.toggle('editing',owner);
@@ -159,10 +162,10 @@ async function setInitialBlockGrid(areaId,rows,columns){
  if(rows===8&&columns===2)return;
  const data=await readApiTab(tabs.blockSettings,'A:D');verifyBlockSettingsHeader(data);
  if(data.some((r,i)=>i>0&&norm(r[0])===norm(areaId)))throw Error('The new area has grid settings already. Open it to check the saved size.');
- const changes=[];if(!normalizedHeader(data[0]?.[3]))changes.push({range:`'${tabs.blockSettings}'!D1`,values:[['Columns']]});
- changes.push({range:`'${tabs.blockSettings}'!A${data.length+1}:D${data.length+1}`,values:[[areaId,rows,now(),columns]]});
+ const changes=[];const upgrade=settingsHeaderUpgrade(data);if(upgrade)changes.push(upgrade);
+ changes.push({range:`'${tabs.blockSettings}'!A${data.length+1}:D${data.length+1}`,values:[settingsRow(settingsHeaders(data),areaId,rows,columns,now())]});
  await apiWrites(changes);
- const verified=await readApiTab(tabs.blockSettings,'A:D');verifyApiHeader(verified,BLOCK_SETTINGS_HEADERS);
+ const verified=await readApiTab(tabs.blockSettings,'A:D');verifyBlockSettingsHeader(verified);
  const next=parseBlockSettings(tableFromApi(verified));if(!next.some(s=>norm(s.areaId)===norm(areaId)&&s.rows===rows&&s.columns===columns))throw Error('Area was created, but the chosen grid size could not be verified. Open the area to review it.');
  state.blockSettings=next;
 }
@@ -250,18 +253,18 @@ async function enableBlockStorage(){
   if(stock.length)verifyApiHeader(stock,BLOCK_STOCK_HEADERS);
   const changes=[];
   if(!settings.length)changes.push({range:`'${tabs.blockSettings}'!A1:D1`,values:[BLOCK_SETTINGS_HEADERS]});
-  else if(!normalizedHeader(settings[0][3]))changes.push({range:`'${tabs.blockSettings}'!D1`,values:[['Columns']]});
+  else {const upgrade=settingsHeaderUpgrade(settings);if(upgrade)changes.push(upgrade);}
   if(!stock.length)changes.push({range:`'${tabs.blockStock}'!A1:E1`,values:[BLOCK_STOCK_HEADERS]});
   if(changes.length)await apiWrites(changes);
   const [s,b]=await Promise.all([readApiTab(tabs.blockSettings,'A:D'),readApiTab(tabs.blockStock,'A:E')]);
-  verifyApiHeader(s,BLOCK_SETTINGS_HEADERS);verifyApiHeader(b,BLOCK_STOCK_HEADERS);
+  verifyBlockSettingsHeader(s);verifyApiHeader(b,BLOCK_STOCK_HEADERS);
   state.blockSettings=parseBlockSettings(tableFromApi(s));state.blockStock=parseBlockStock(tableFromApi(b));state.blocksReady=true;
   render();toast('Block storage enabled. Set rows and columns independently in each area.');connection('Owner connected','live');
  }catch(err){toast(err.message||'Could not enable storage blocks.');connection('Setup failed','error');}
  finally{busy=false;$('enableBlocks').disabled=false;}
 }
 // Upgrades the previous 3-column settings tab without altering existing row counts or stock.
-function verifyBlockSettingsHeader(rows){if(!rows.length)return;verifyApiHeader(rows,BLOCK_SETTINGS_HEADERS.slice(0,3));if(rows[0][3]&&normalizedHeader(rows[0][3])!=='columns')throw Error('Warehouse Block Settings column D must be named Columns.');}
+function verifyBlockSettingsHeader(rows){if(!rows.length)return;verifyApiHeader(rows,BLOCK_SETTINGS_HEADERS.slice(0,3));settingsHeaders(rows);}
 async function saveBlockGrid(){
  if(!isOwner()||busy||!selectedId||!state.blocksReady)return;
  const id=selectedId,rows=Number($('blockRowCount').value),columns=Number($('blockColumnCount').value),oldRows=blockRows(id),oldColumns=blockColumns(id);
@@ -279,11 +282,11 @@ async function saveBlockGrid(){
   const remoteStock=await readApiTab(tabs.blockStock,'A:E');verifyApiHeader(remoteStock,BLOCK_STOCK_HEADERS);
   if(parseBlockStock(tableFromApi(remoteStock)).some(s=>{if(norm(s.areaId)!==norm(id))return false;const pos=blockCoordinates(s.blockId);return !pos||pos.row>rows||pos.col>columns;}))throw Error('A block being removed contains stock. Refresh and relocate its stock first.');
   const writes=[];
-  if(!normalizedHeader(data[0][3]))writes.push({range:`'${tabs.blockSettings}'!D1`,values:[['Columns']]});
+  const upgrade=settingsHeaderUpgrade(data);if(upgrade)writes.push(upgrade);
   const n=at>=0?at+1:data.length+1;
-  writes.push({range:`'${tabs.blockSettings}'!A${n}:D${n}`,values:[[id,rows,now(),columns]]});
+  writes.push({range:`'${tabs.blockSettings}'!A${n}:D${n}`,values:[settingsRow(settingsHeaders(data),id,rows,columns,now())]});
   await apiWrites(writes);
-  data=await readApiTab(tabs.blockSettings,'A:D');verifyApiHeader(data,BLOCK_SETTINGS_HEADERS);
+  data=await readApiTab(tabs.blockSettings,'A:D');verifyBlockSettingsHeader(data);
   const after=parseBlockSettings(tableFromApi(data));
   if(!after.some(x=>norm(x.areaId)===norm(id)&&x.rows===rows&&x.columns===columns))throw Error('Block grid could not be verified.');
   state.blockSettings=after;render();toast(`Area now has ${rows*columns} blocks (${rows} × ${columns}).`);
