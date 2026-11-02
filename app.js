@@ -17,6 +17,7 @@ const now=()=>new Date().toISOString(), fmt=n=>Number(n||0).toLocaleString('en-G
 const normalizedHeader=s=>norm(s).replace(/[^a-z0-9]/g,'');
 const dateText=s=>{const d=new Date(s);return Number.isFinite(+d)?d.toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):String(s||'')};
 let state={areas:[],stock:[],events:[],legacy:false,loaded:false,legacyAreas:[],legacyStock:[],blockSettings:[],blockStock:[],blocksReady:false};
+let bulkMode=false,bulkSelected=new Set(),findRequest=null;
 let mode='viewer',token='',ownerEmail='',tokenClient=null,gisReady=false,designing=false,selectedId='',selectedBlock='',editingId='',stockAction='add',filterItem='',busy=false,toastTimer=0,loading=false,queuedLoad=false,drag=null,stockPress=null,stockPressTimer=0,stockDrop=null,ignoreClickUntil=0;
 const activeAreas=()=>state.areas.filter(a=>a.active);
 const getArea=id=>activeAreas().find(a=>norm(a.id)===norm(id));
@@ -85,11 +86,47 @@ function render(){const owner=isOwner();$('modePill').textContent=owner?'OWNER E
  $('ownerButton').textContent=owner?'Lock editing':'Owner edit';$('ownerButton').classList.toggle('btn-dark',!owner);
  $('setupButton').classList.toggle('hidden',!owner||!state.legacy);$('designButton').classList.toggle('hidden',!owner||state.legacy);$('addAreaButton').classList.toggle('hidden',!owner||state.legacy||!designing);$('enableBlocks').classList.toggle('hidden',!owner||state.legacy||state.blocksReady);
  if(!owner)designing=false;$('designButton').textContent=designing?'Finish design':'Design layout';$('designerHint').classList.toggle('hidden',!designing);$('mapDescription').textContent=designing?'Arrange and resize your holding areas.':owner&&!state.legacy?'Select an area, or long-press a stocked block to move its contents.':'Select an area to view its contents.';
- renderSummary();renderBoard();renderList();renderActivity();if(selectedId&&$('detailsOverlay').classList.contains('open'))renderDetails(false);if($('mapOverlay').classList.contains('open'))renderFocusMap();
+ renderSummary();renderFindChoices();renderFindResult();renderBoard();renderList();renderActivity();if(selectedId&&$('detailsOverlay').classList.contains('open'))renderDetails(false);if($('mapOverlay').classList.contains('open'))renderFocusMap();
 }
 function renderSummary(){const groups=new Map(PRESETS.map(name=>[norm(name),{name,qty:0,areas:new Set()}]));for(const s of [...state.stock,...state.blockStock]){if(!getArea(s.areaId))continue;const key=norm(s.item),found=groups.get(key)||{name:s.item,qty:0,areas:new Set()};found.qty+=s.quantity;found.areas.add(norm(s.areaId));groups.set(key,found);}
  const order=[...groups.values()].sort((a,b)=>{const ia=PRESETS.findIndex(x=>norm(x)===norm(a.name)),ib=PRESETS.findIndex(x=>norm(x)===norm(b.name));return (ia<0?999:ia)-(ib<0?999:ib)||a.name.localeCompare(b.name);});const el=$('summary');el.replaceChildren();for(const group of order){const card=make('button','summary-card '+assetColor(group.name));card.type='button';card.setAttribute('aria-pressed',String(norm(group.name)===filterItem));card.setAttribute('aria-label',`${group.name}: ${fmt(group.qty)} in ${group.areas.size} areas`);card.append(make('span','name',group.name),make('strong','',fmt(group.qty)),make('small','',`${group.areas.size} ${group.areas.size===1?'area':'areas'}`));card.onclick=()=>{filterItem=filterItem===norm(group.name)?'':norm(group.name);render();};el.append(card);}$('clearFilter').classList.toggle('hidden',!filterItem);}
 const areaFiltered=a=>Boolean(filterItem&&!stockAt(a.id).some(s=>norm(s.item)===filterItem));
+// Public retrieval: find and present a route, but never change the sheet.
+function renderFindChoices(){
+ const select=$('findItem'),previous=select.value,names=new Map();
+ for(const name of PRESETS)names.set(norm(name),name);
+ for(const item of [...state.stock,...state.blockStock])if(item.quantity>0&&!names.has(norm(item.item)))names.set(norm(item.item),item.item);
+ select.replaceChildren();select.append(new Option('Choose an asset',''));
+ for(const name of names.values())select.append(new Option(name,name));
+ const matched=[...select.options].find(o=>norm(o.value)===norm(previous)&&previous);
+ if(matched)select.value=matched.value;
+}
+function renderFindResult(){
+ const panel=$('findResult');panel.replaceChildren();panel.classList.toggle('hidden',!findRequest||!state.loaded);
+ if(!findRequest||!state.loaded)return;
+ let result;try{
+  result=window.WarehouseRetrieval.plan({areas:state.areas,blockSettings:state.blockSettings,blockStock:state.blockStock,looseStock:state.stock,item:findRequest.item,quantity:findRequest.quantity});
+ }catch(err){panel.append(make('p','form-error',err.message));return;}
+ const heading=make('div','find-result-head'),title=make('strong','',result.shortfall?`Route found ${fmt(result.planned)} of ${fmt(result.requested)} requested`:`Pick ${fmt(result.requested)} ${result.item}`);
+ heading.append(title,make('span',result.shortfall?'find-short':'find-complete',result.shortfall?'Partial route':'Ready to pick'));panel.append(heading);
+ if(!result.steps.length)panel.append(make('p','find-message','No immediately accessible stock is recorded in assigned blocks.'));
+ const list=make('div','pick-list');result.steps.forEach((step,i)=>{
+  const row=make('button','pick-step');row.type='button';row.append(make('span','pick-number',String(i+1)));
+  const details=make('div','pick-location');details.append(make('strong','',`${step.areaName||step.areaId} · ${step.areaId} / ${step.blockId}`),make('span','',`Row ${step.row} · Column ${step.column}${step.mixed?' · Other assets also in this block':''}`));
+  row.append(details,make('span','pick-quantity',`Take ${fmt(step.take)}`));
+  row.setAttribute('aria-label',`Step ${i+1}: take ${fmt(step.take)} ${result.item} from ${step.areaId}, block ${step.blockId}`);
+  row.onclick=()=>{openDetails(step.areaId);openBlock(step.blockId);};list.append(row);
+ });panel.append(list);
+ if(result.shortfall)panel.append(make('p','find-warning',`Short by ${fmt(result.shortfall)}. Only ${fmt(result.accessible)} are reachable without moving other asset types.`));
+ if(result.blocked)panel.append(make('p','find-footnote',`${fmt(result.blocked)} additional ${result.item} are behind other asset types in their columns. They are excluded from this pick route.`));
+ if(result.unassigned)panel.append(make('p','find-footnote',`${fmt(result.unassigned)} ${result.item} are not assigned to a block and cannot be routed until they have a location.`));
+ panel.append(make('p','find-footnote','Each column is accessed from its highest-numbered row (N) towards row 1. Empty blocks can be passed. A deeper block is only included after the front stock of that column is cleared. This is a read-only plan; verify the physical route before collecting.'));
+}
+function findAssets(e){e.preventDefault();
+ const item=$('findItem').value,quantity=Number($('findQty').value);
+ if(!item||!Number.isSafeInteger(quantity)||quantity<1){$('findResult').classList.remove('hidden');$('findResult').textContent='Choose an asset type and enter a positive whole quantity.';return;}
+ findRequest={item,quantity};renderFindResult();$('findResult').scrollIntoView({block:'nearest',behavior:'smooth'});
+}
 function renderBoard(){const areas=activeAreas(),b=$('board');const rows=Math.max(MIN_R,...areas.map(a=>a.y+a.h+1));b.style.setProperty('--cols',C);b.style.setProperty('--rows',Math.min(MAX_R,rows));b.classList.toggle('designing',designing);b.replaceChildren();
  for(const area of areas){const occupied=stockAt(area.id),special=!canHold(area),el=make('div','map-block '+(occupied.length?'occupied ':'')+(special?'special ':'')+'color-'+area.color+(areaFiltered(area)?' filtered':''));el.tabIndex=0;el.setAttribute('role','button');el.dataset.id=area.id;el.setAttribute('aria-label',`${area.id}, ${area.name}: ${occupied.length} item types`);el.style.gridColumn=`${area.x} / span ${area.w}`;el.style.gridRow=`${area.y} / span ${area.h}`;el.append(make('span','block-id',area.id),make('span','block-name',area.name),make('span','block-status',special?area.type:occupied.length?`${occupied.length} ${occupied.length===1?'type':'types'} stored`:'Empty'));
  if(designing){const handle=make('button','resize-handle','⤡');handle.type='button';handle.title='Resize area';handle.setAttribute('aria-label',`Resize ${area.id}`);el.append(handle);el.addEventListener('pointerdown',e=>startDrag(e,area,el));}else if(isOwner()&&!state.legacy&&occupied.length){el.addEventListener('pointerdown',e=>startStockPress(e,area,el));}
@@ -106,12 +143,12 @@ function areaURL(id){const u=new URL(window.location.href);u.searchParams.set('a
 function changeURL(id,replace=false){const u=new URL(location.href);if(id){u.searchParams.set('area',id);u.searchParams.delete('block');}else{u.searchParams.delete('area');u.searchParams.delete('block');}history[replace?'replaceState':'pushState']({},'',u.pathname+u.search+u.hash);}
 function focusRoute(on){document.documentElement.classList.toggle('area-route',on);document.body.classList.toggle('area-focus',on);$('areaLoading').classList.toggle('hidden',!on);}
 function openFromURL(){const q=new URLSearchParams(location.search),id=q.get('area');if(!id){if(selectedId)closeDetails(false);else focusRoute(false);return;}if(!state.loaded)return;const a=getArea(id);if(a){if(selectedId!==a.id)openDetails(a.id,false);else focusRoute(true);const block=q.get('block');if(block&&validBlock(a.id,block)){if(selectedBlock!==block)openBlock(block,false);}else if(selectedBlock)closeBlock(false);}else{toast(`Area ${id} was not found.`);changeURL('',true);closeDetails(false);focusRoute(false);notice(`Area ${id} was not found. Check the link or select an area from the warehouse overview.`,'error');}}
-function openDetails(id,update=true){const a=getArea(id);if(!a)return;selectedId=a.id;selectedBlock='';stockAction='add';$('stockForm').reset();$('stockQty').value='1';setError('stockError','');$('linkStatus').textContent='';renderDetails(true);focusRoute(true);$('areaLoading').classList.add('hidden');openOverlay('detailsOverlay');if(update)changeURL(a.id);}
+function openDetails(id,update=true){const a=getArea(id);if(!a)return;if(norm(selectedId)!==norm(a.id)){bulkMode=false;bulkSelected.clear();}selectedId=a.id;selectedBlock='';stockAction='add';$('stockForm').reset();$('stockQty').value='1';setError('stockError','');$('linkStatus').textContent='';renderDetails(true);focusRoute(true);$('areaLoading').classList.add('hidden');openOverlay('detailsOverlay');if(update)changeURL(a.id);}
 function renderDetails(resetStock=false){const a=getArea(selectedId);if(!a){closeDetails(true);return;}$('areaType').textContent=a.type.toUpperCase();$('areaTitle').textContent=a.name;$('areaSubtitle').textContent=a.id; $('areaViewMode').textContent=isOwner()?'OWNER EDIT':'VIEW ONLY';$('areaOwnerButton').textContent=isOwner()?'Lock editing':'Owner edit';
  const tags=$('areaMeta');tags.replaceChildren();for(const t of [a.id,a.zone,a.type].filter(Boolean))tags.append(make('span','',t));const items=stockAt(a.id).sort((a,b)=>a.item.localeCompare(b.item));renderBlockGrid(a.id);$('areaItemCount').textContent=`${items.length} ${items.length===1?'type':'types'}`;const wrap=$('contents');wrap.replaceChildren();for(const s of items){const row=make('div','content-row');row.append(make('span','content-name',s.item),make('span','content-qty',fmt(s.quantity)));wrap.append(row);}if(!items.length)wrap.append(make('div','content-empty','Nothing stored in this area.'));
  const enabled=isOwner()&&!state.legacy&&canHold(a)&&looseStockAt(a.id).length>0;$('ownerStockPanel').classList.toggle('hidden',!enabled);$('clearArea').disabled=!items.length;$('transferPanel').classList.toggle('hidden',!looseStockAt(a.id).length);if(items.length){const dest=$('transferTo'),previous=dest.value;dest.replaceChildren();dest.append(new Option('Choose destination area',''));for(const other of activeAreas().filter(other=>norm(other.id)!==norm(a.id)&&canHold(other)).sort((x,y)=>x.id.localeCompare(y.id,undefined,{numeric:true})))dest.append(new Option(`${other.id} · ${other.name}`,other.id));if([...dest.options].some(o=>o.value===previous))dest.value=previous;}
  if(resetStock){$('stockForm').reset();$('stockQty').value='1';setStockAction('add');}else if(stockAction==='remove')setRemoveOptions();}
-function closeDetails(update=true){if(update&&new URLSearchParams(location.search).has('area'))changeURL('');closeOverlay('mapOverlay');closeOverlay('blockOverlay');closeOverlay('detailsOverlay');selectedId='';selectedBlock='';focusRoute(false);}
+function closeDetails(update=true){bulkMode=false;bulkSelected.clear();if(update&&new URLSearchParams(location.search).has('area'))changeURL('');closeOverlay('mapOverlay');closeOverlay('blockOverlay');closeOverlay('detailsOverlay');selectedId='';selectedBlock='';focusRoute(false);}
 function openOverlay(id){$(id).classList.add('open');$(id).setAttribute('aria-hidden','false');document.body.style.overflow='hidden';}
 function closeOverlay(id){$(id).classList.remove('open');$(id).setAttribute('aria-hidden','true');if(!document.querySelector('.overlay.open'))document.body.style.overflow='';}
 function setRemoveOptions(){const chosen=$('itemType').value,items=looseStockAt(selectedId);$('itemType').replaceChildren();$('itemType').append(new Option('Choose an asset',''));for(const s of items)$('itemType').append(new Option(`${s.item} (${fmt(s.quantity)} here)`,s.item));if(items.some(s=>s.item===chosen))$('itemType').value=chosen;else $('itemType').value=items.length===1?items[0].item:'';$('customWrap').classList.add('hidden');$('customItem').required=false;}
@@ -191,25 +228,71 @@ async function setupWarehouse(){if(!isOwner()||busy)return;const ok=confirm('Act
  ar=await readApiTab(tabs.areas,'A:K');st=await readApiTab(tabs.stock,'A:D');verifyApiHeader(ar,AREA_HEADERS);verifyApiHeader(st,STOCK_HEADERS);const savedAreas=parseAreas(tableFromApi(ar)),savedStock=parseStock(tableFromApi(st));if(savedAreas.length!==areas.length||!equalStock(savedStock,legacy.stock))throw new Error('The imported inventory could not be fully verified. Check the new tabs before proceeding.');
  state.areas=savedAreas;state.stock=savedStock;state.legacy=false;state.loaded=true;designing=false;notice();render();connection('Owner connected','live');toast('Warehouse layout activated. Original stock preserved.');
  }catch(err){notice(err.message||'Could not set up the warehouse.','error');connection('Setup needs attention','error');}finally{busy=false;$('setupButton').disabled=false;}}
+// Bulk selection is local until an owner confirms one verified Sheets batch.
+function renderBulk(){
+ const permitted=isOwner()&&!state.legacy&&state.blocksReady&&canHold(getArea(selectedId));
+ if(!permitted){bulkMode=false;bulkSelected.clear();}
+ $('bulkToolbar').classList.toggle('hidden',!permitted);
+ $('bulkStart').classList.toggle('hidden',bulkMode);$('bulkSelectAll').classList.toggle('hidden',!bulkMode);$('bulkCancel').classList.toggle('hidden',!bulkMode);
+ $('bulkHint').textContent=bulkMode?'Tap stocked blocks to select or deselect. Each selected block will be emptied.':'Remove the full contents of several blocks in one operation.';
+ const valid=[...bulkSelected].filter(id=>blockStockAt(selectedId,id).length>0&&validBlock(selectedId,id));
+ bulkSelected=new Set(valid);
+ $('bulkSummary').classList.toggle('hidden',!permitted||!bulkMode);
+ $('bulkSelectedCount').textContent=`${valid.length} ${valid.length===1?'block':'blocks'} selected`;
+ const totals=new Map();for(const id of valid)for(const s of blockStockAt(selectedId,id)){
+  const key=norm(s.item),entry=totals.get(key)||{item:s.item,quantity:0};entry.quantity+=s.quantity;totals.set(key,entry);
+ }
+ const box=$('bulkTotals');box.replaceChildren();
+ if(!valid.length)box.append(make('p','bulk-empty','Select a stocked block above to see removal totals.'));
+ for(const item of [...totals.values()].sort((a,b)=>a.item.localeCompare(b.item))){const row=make('div','bulk-total-row');row.append(make('span','',item.item),make('strong','',fmt(item.quantity)));box.append(row);}
+ $('bulkRemove').disabled=!valid.length||busy;
+}
+function refreshBulkBlockState(){for(const button of $('innerBlocks').children){const chosen=bulkSelected.has(button.dataset.block);button.classList.toggle('bulk-picked',chosen);button.setAttribute('aria-pressed',String(chosen));}renderBulk();}
+function toggleBulkBlock(id){if(!bulkMode||!isOwner()||busy)return;if(!blockStockAt(selectedId,id).length)return;
+ if(bulkSelected.has(id))bulkSelected.delete(id);else bulkSelected.add(id);setError('bulkError','');refreshBulkBlockState();}
+function startBulk(){if(!isOwner()||!state.blocksReady||busy)return;bulkMode=true;bulkSelected.clear();setError('bulkError','');renderBlockGrid(selectedId);}
+function cancelBulk(){bulkMode=false;bulkSelected.clear();setError('bulkError','');renderBlockGrid(selectedId);}
+function selectAllBulk(){if(!bulkMode)return;const ids=blockIds(blockRows(selectedId),blockColumns(selectedId)).filter(id=>blockStockAt(selectedId,id).length);bulkSelected=new Set(ids);refreshBulkBlockState();}
+async function removeBulk(){
+ if(!isOwner()||!bulkMode||busy)return;
+ const area=selectedId,blocks=[...bulkSelected].filter(id=>blockStockAt(area,id).length&&validBlock(area,id));
+ if(!blocks.length){setError('bulkError','Select at least one stocked block.');return;}
+ const totals=new Map();for(const id of blocks)for(const s of blockStockAt(area,id)){
+  const key=norm(s.item),e=totals.get(key)||{item:s.item,quantity:0};e.quantity+=s.quantity;totals.set(key,e);
+ }
+ const summary=[...totals.values()].map(s=>`• ${s.item}: ${fmt(s.quantity)}`).join('\n');
+ if(!confirm(`Empty ${blocks.length} selected blocks in ${area}?\n\n${summary}\n\nThe full contents of each selected block will be removed from inventory and logged.`))return;
+ $('bulkRemove').disabled=true;setError('bulkError','');
+ try{
+  await transactBlockStock(blocks.map(id=>[area,id]),current=>{
+   for(const id of blocks)current.get(blockKey(area,id)).clear();
+  },(before,stamp)=>blocks.flatMap(id=>[...before.get(blockKey(area,id)).values()].map(s=>({timestamp:stamp,action:'Bulk remove',item:s.item,quantity:s.quantity,from:`${area}/${id}`,to:'',note:`Bulk removal of ${blocks.length} blocks`}))));
+  bulkMode=false;bulkSelected.clear();renderDetails(false);
+ }catch(err){setError('bulkError',err.message||'Bulk removal failed. Refresh and check stock.');renderBulk();}
+ finally{$('bulkRemove').disabled=false;}
+}
 // Each warehouse area has independent, owner-configurable rows and columns.
 function renderBlockGrid(areaId){
  const area=getArea(areaId),grid=$('innerBlocks');grid.replaceChildren();if(!area)return;
  const rows=blockRows(areaId),columns=blockColumns(areaId),total=state.blockStock.filter(s=>norm(s.areaId)===norm(areaId)&&s.quantity>0);$('blockFindStatus').textContent='';
  grid.style.gridTemplateColumns=`repeat(${columns},minmax(124px,1fr))`;
  $('blockMapCount').textContent=`${rows} rows × ${columns} columns · ${rows*columns} blocks`;
+ $('blockAccessCaption').textContent=`Access from row ${rows} (N), working towards row 1. Tap a block to view its contents.`;
  $('rowSettings').classList.toggle('hidden',!isOwner()||state.legacy||!canHold(area));
  $('blockRowCount').value=rows;$('blockColumnCount').value=columns;const hasStock=stockAt(areaId).length>0;$('clearWholeArea').classList.toggle('hidden',!isOwner()||state.legacy||!hasStock);$('clearWholeArea').disabled=!hasStock;
  $('blocksDisabled').classList.toggle('hidden',canHold(area));
  $('blockGridWrap').classList.toggle('hidden',!canHold(area));
- if(!canHold(area))return;
+ if(!canHold(area)){renderBulk();return;}
  for(const id of blockIds(rows,columns)){
   const contents=blockStockAt(areaId,id),lane=blockCoordinates(id).col;
-  const el=make('button','inner-block '+(contents.length?'filled ':'')+(lane%2===0?'lane-b':'lane-a'));
+  const el=make('button','inner-block '+(contents.length?'filled ':'')+(lane%2===0?'lane-b':'lane-a')+(bulkMode&&bulkSelected.has(id)?' bulk-picked':''));
   el.type='button';el.dataset.block=id;el.setAttribute('aria-label',`${areaId} block ${id}, ${contents.length} item types`);
   el.append(make('strong','inner-id',id),make('span','inner-note',contents.length?contents.map(s=>`${s.item}: ${fmt(s.quantity)}`).join(' · '):'Empty'));
-  el.onclick=()=>openBlock(id);grid.append(el);
+  el.setAttribute('aria-pressed',String(bulkMode&&bulkSelected.has(id)));if(bulkMode&&!contents.length)el.disabled=true;
+  el.onclick=()=>bulkMode?toggleBulkBlock(id):openBlock(id);grid.append(el);
  }
  const loose=looseStockAt(areaId),legacy=$('unassignedPanel');$('assignLoosePanel').classList.toggle('hidden',!isOwner()||!state.blocksReady||!loose.length);const dest=$('assignLooseTo'),prior=dest.value;dest.replaceChildren();dest.append(new Option('Choose target block',''));for(const id of blockIds(rows,columns))dest.append(new Option(`Block ${id}`,id));if([...dest.options].some(o=>o.value===prior))dest.value=prior;legacy.classList.toggle('hidden',!loose.length);
+ renderBulk();
  const wrap=$('unassignedContents');wrap.replaceChildren();for(const s of loose){const item=make('div','content-row');item.append(make('span','content-name',s.item),make('span','content-qty',fmt(s.quantity)));wrap.append(item);}
 }
 function findBlock(){const id=String($('blockFind').value||'').trim().toUpperCase(),status=$('blockFindStatus');if(!validBlock(selectedId,id)){status.textContent='That block is not in this area.';return;}
@@ -422,8 +505,11 @@ async function clearEntireArea(areaId){
 
 function signIn(){if(!cfg.OAUTH_CLIENT_ID||!cfg.OWNER_EMAIL){toast('Owner login is not configured.');return;}if(!gisReady||!window.google?.accounts?.oauth2){toast('Google sign-in is loading. Try again.');return;}
  if(!tokenClient)tokenClient=google.accounts.oauth2.initTokenClient({client_id:cfg.OAUTH_CLIENT_ID,scope:'openid email https://www.googleapis.com/auth/spreadsheets',callback:async r=>{if(!r.access_token){toast('Sign-in was cancelled.');return;}const candidate=r.access_token;try{const response=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+candidate}});if(!response.ok)throw new Error('Could not verify Google account.');const who=await response.json();if(!who.email_verified||norm(who.email)!==norm(cfg.OWNER_EMAIL))throw new Error('This account does not have owner access.');token=candidate;ownerEmail=who.email;mode='owner';render();toast('Owner editing unlocked.');}catch(err){token='';ownerEmail='';mode='viewer';render();toast(err.message);}}});tokenClient.requestAccessToken({prompt:'select_account'});}
-function signOut(){clearStockDrag();token='';ownerEmail='';mode='viewer';designing=false;closeEditor();render();connection('Live · view only','live');toast('Editing locked.');}
+function signOut(){bulkMode=false;bulkSelected.clear();clearStockDrag();token='';ownerEmail='';mode='viewer';designing=false;closeEditor();render();connection('Live · view only','live');toast('Editing locked.');}
 function initialise(){
+ $('findForm').onsubmit=findAssets; $('findItem').addEventListener('change',()=>{findRequest=null;$('findResult').classList.add('hidden');});$('findQty').addEventListener('input',()=>{findRequest=null;$('findResult').classList.add('hidden');});
+ $('bulkStart').onclick=startBulk;$('bulkCancel').onclick=cancelBulk;$('bulkSelectAll').onclick=selectAllBulk;$('bulkRemove').onclick=removeBulk;
+ $('areaFindAction').onclick=()=>{openWarehouseOverview();requestAnimationFrame(()=>$('findPanel').scrollIntoView({behavior:'smooth',block:'start'}));};
  $('enableBlocks').onclick=enableBlockStorage;$('saveBlockGrid').onclick=saveBlockGrid;$('blockFindGo').onclick=findBlock;$('blockFind').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findBlock();}});$('areaOwnerButton').onclick=()=>isOwner()?signOut():signIn();$('openAreaMap').onclick=showAreaMap;$('closeMap').onclick=()=>closeOverlay('mapOverlay');$('returnArea').onclick=()=>closeOverlay('mapOverlay');$('warehouseOverview').onclick=openWarehouseOverview;$('mapOverlay').addEventListener('click',e=>{if(e.target===$('mapOverlay'))closeOverlay('mapOverlay');});$('closeBlock').onclick=()=>closeBlock();$('doneBlock').onclick=()=>closeBlock();$('blockForm').onsubmit=submitBlockStock;$('blockClear').onclick=clearBlock;$('blockMove').onclick=transferBlock;$('blockAction').onchange=renderBlockDetails;$('blockItem').onchange=renderBlockDetails;$('blockOverlay').addEventListener('click',e=>{if(e.target===$('blockOverlay'))closeBlock();});$('copyBlockLink').onclick=async()=>{const link=blockLink(selectedId,selectedBlock);try{await navigator.clipboard.writeText(link);toast('Block link copied.');}catch{prompt('Copy block link:',link);}};$('ownerButton').onclick=()=>isOwner()?signOut():signIn();$('refresh').onclick=()=>loadData();$('setupButton').onclick=setupWarehouse;$('designButton').onclick=()=>{designing=!designing;render();};$('addAreaButton').onclick=()=>openAreaEditor();$('clearFilter').onclick=()=>{filterItem='';render();};$('search').addEventListener('input',renderList);
  $('closeDetails').onclick=()=>closeDetails();$('doneDetails').onclick=()=>closeDetails();$('closeEditor').onclick=closeEditor;
  $('detailsOverlay').addEventListener('click',e=>{if(e.target===$('detailsOverlay'))closeDetails();});$('editorOverlay').addEventListener('click',e=>{if(e.target===$('editorOverlay'))closeEditor();});
