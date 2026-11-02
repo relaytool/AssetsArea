@@ -6,11 +6,11 @@
   <meta name="theme-color" content="#f4f7f5">
   <meta name="description" content="Live warehouse storage map and area inventory">
   <title>Warehouse | Assets Area</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=3">
   <script>if(new URLSearchParams(location.search).has('area'))document.documentElement.classList.add('area-route');</script>
   <script defer src="config.js"></script>
-  <script defer src="retrieval.js"></script>
-  <script defer src="app.js"></script>
+  <script defer src="retrieval.js?v=3"></script>
+  <script defer src="app.js?v=3"></script>
   <script async defer src="https://accounts.google.com/gsi/client" onload="window.warehouseGisReady?.()"></script>
 </head>
 <body>
@@ -24,7 +24,7 @@
   <section class="intro"><div><div class="eyebrow">WAREHOUSE OVERVIEW</div><h2>Storage, at a glance.</h2><p>Choose an area to see exactly what's stored inside.</p></div><div class="mode-pill" id="modePill">VIEW ONLY</div></section>
   <section class="summary-section" aria-labelledby="summaryTitle"><div class="section-top"><div><h3 id="summaryTitle">Inventory by asset type</h3><p>Quantities stay separate for each asset type.</p></div><button class="link-button hidden" id="clearFilter">Clear filter</button></div><div id="summary" class="summary-grid"></div></section>
   <section class="find-panel" id="findPanel" aria-labelledby="findTitle">
-    <div class="section-top"><div><div class="eyebrow">PUBLIC · NO LOGIN REQUIRED</div><h3 id="findTitle">Find assets to collect</h3><p>Get an ordered pick route, starting at row N (the accessible end) of each column.</p></div></div>
+    <div class="section-top"><div><div class="eyebrow">PUBLIC · NO LOGIN REQUIRED</div><h3 id="findTitle">Find assets to collect</h3><p>Find an ordered route across multiple areas, with highlighted blocks on the warehouse map. Picking starts at row N in every column.</p></div></div>
     <form id="findForm" class="find-form">
       <label class="field"><span>Asset type</span><select id="findItem" required><option value="">Choose an asset</option></select></label>
       <label class="field"><span>Quantity needed</span><input id="findQty" type="number" min="1" max="99999999" step="1" value="1" required></label>

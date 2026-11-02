@@ -101,27 +101,94 @@ function renderFindChoices(){
  const matched=[...select.options].find(o=>norm(o.value)===norm(previous)&&previous);
  if(matched)select.value=matched.value;
 }
+function focusFindPick(index,scrollTo='map'){
+ const selected=document.querySelectorAll('#findResult .find-mini-cell.is-selected, #findResult .pick-step');
+ for(const node of selected)node.classList.toggle('find-focused',Number(node.dataset.pickIndex)===index);
+ const target=$('findResult').querySelector(scrollTo==='map'?`.find-mini-cell[data-pick-index="${index}"]`:`.pick-step[data-pick-index="${index}"]`);
+ if(target){target.scrollIntoView({block:'center',inline:'center',behavior:'smooth'});target.focus({preventScroll:true});}
+}
+function renderFindMap(result,panel){
+ if(!result.steps.length)return;
+ const groups=result.areasUsed||[],areaGroups=new Map(groups.map((group,i)=>[norm(group.areaId),{...group,order:i+1}]));
+ const section=make('section','find-visual');section.setAttribute('aria-label','Visual picking map');
+ const top=make('div','find-visual-head');top.append(make('div','find-visual-title','Visual picking map'),make('span','find-visual-hint','Numbered markers show where to collect'));section.append(top);
+ const overview=make('div','find-overview');
+ const mapHead=make('div','find-map-heading');mapHead.append(make('strong','','Warehouse overview'),make('span','',`${groups.length} ${groups.length===1?'area':'areas'} · ${result.steps.length} ${result.steps.length===1?'block':'blocks'} on this route`));overview.append(mapHead);
+ const mapScroll=make('div','find-floor-scroll'),map=make('div','warehouse-board find-overview-board');
+ const visible=activeAreas(),rows=Math.max(4,...visible.map(a=>a.y+a.h+1));
+ map.style.setProperty('--cols',C);map.style.setProperty('--rows',Math.min(MAX_R,rows));
+ for(const area of visible){
+  const group=areaGroups.get(norm(area.id)),tile=make(group?'button':'div',`map-block find-floor-area color-${area.color}`+(group?' find-target-area':' find-dim-area'));
+  if(group){tile.type='button';tile.setAttribute('aria-label',`Stop ${group.order}: ${area.name}, ${group.steps.length} blocks, collect ${fmt(group.quantity)} ${result.item}`);tile.onclick=()=>{$(`findArea_${group.order}`)?.scrollIntoView({block:'start',behavior:'smooth'});};}
+  tile.style.gridColumn=`${area.x} / span ${area.w}`;tile.style.gridRow=`${area.y} / span ${area.h}`;
+  tile.append(make('span','block-id',area.id),make('span','block-name',area.name));
+  if(group){tile.append(make('span','find-floor-badge',`STOP ${group.order} · ${group.steps.length} ${group.steps.length===1?'BLOCK':'BLOCKS'}`));}
+  map.append(tile);
+ }
+ mapScroll.append(map);overview.append(mapScroll);
+ overview.append(make('p','find-map-hint','Highlighted areas are part of your collection route. Select an area to jump to its blocks.'));
+ section.append(overview);
+ const cards=make('div','find-area-maps');
+ for(let groupIndex=0;groupIndex<groups.length;groupIndex++){
+  const group=groups[groupIndex],area=getArea(group.areaId);if(!area)continue;
+  const rows=blockRows(area.id),columns=blockColumns(area.id),selected=new Map(group.steps.map(step=>[norm(step.blockId),step]));
+  const occupied=new Map();for(const stock of state.blockStock)if(norm(stock.areaId)===norm(area.id)&&stock.quantity>0){const key=norm(stock.blockId);occupied.set(key,(occupied.get(key)||0)+stock.quantity);}
+  const card=make('section','find-area-map');card.id=`findArea_${groupIndex+1}`;card.setAttribute('aria-label',`${group.areaName} block map`);
+  const header=make('div','find-area-map-head'),number=make('span','find-area-order',String(groupIndex+1)),copy=make('div','find-area-heading');
+  copy.append(make('strong','',`${group.areaName} · ${group.areaId}`),make('span','',`${rows} rows × ${columns} columns · Collect ${fmt(group.quantity)} ${result.item}`));
+  header.append(number,copy,make('span','find-block-count',`${group.steps.length} ${group.steps.length===1?'block':'blocks'}`));card.append(header);
+  const wrap=make('div','find-mini-scroll'),grid=make('div','find-mini-grid');grid.style.gridTemplateColumns=`repeat(${columns},minmax(67px,1fr))`;
+  for(let row=1;row<=rows;row++)for(let col=1;col<=columns;col++){
+   const id=blockColumnLabel(col)+String(row).padStart(2,'0'),step=selected.get(norm(id)),total=occupied.get(norm(id))||0;
+   const cell=make(step?'button':'div',`find-mini-cell${step?' is-selected':total?' is-stocked':' is-empty'}`);
+   cell.dataset.block=id;
+   cell.append(make('span','find-cell-id',id));
+   if(step){
+    const index=step.number;cell.type='button';cell.dataset.pickIndex=String(index);cell.setAttribute('aria-label',`Pick ${index}, ${area.name}, block ${id}: take ${fmt(step.take)} ${result.item}. Open block contents.`);
+    cell.append(make('span','find-cell-pin',`#${index}`),make('span','find-cell-qty',`Take ${fmt(step.take)}`));
+    cell.onclick=()=>{openDetails(area.id);openBlock(id);};
+   }else if(total){cell.append(make('span','find-cell-stock','Occupied'));}
+   grid.append(cell);
+  }
+  wrap.append(grid);card.append(wrap);
+  const foot=make('div','find-area-entry');foot.append(make('span','find-entry-arrow','↑'),make('span','',`ACCESS FROM ROW ${rows} (N) · MOVE TOWARDS ROW 1`));card.append(foot);
+  const summary=make('div','find-area-stops');
+  for(const step of group.steps){const chip=make('button','find-area-stop-chip',`#${step.number}  ${step.blockId} · ${fmt(step.take)}`);chip.type='button';chip.onclick=()=>focusFindPick(step.number,'map');summary.append(chip);}
+  card.append(summary);cards.append(card);
+ }
+ section.append(cards);panel.append(section);
+}
 function renderFindResult(){
  const panel=$('findResult');panel.replaceChildren();panel.classList.toggle('hidden',!findRequest||!state.loaded);
  if(!findRequest||!state.loaded)return;
  let result;try{
   result=window.WarehouseRetrieval.plan({areas:state.areas,blockSettings:state.blockSettings,blockStock:state.blockStock,looseStock:state.stock,item:findRequest.item,quantity:findRequest.quantity});
  }catch(err){panel.append(make('p','form-error',err.message));return;}
- const heading=make('div','find-result-head'),title=make('strong','',result.shortfall?`Route found ${fmt(result.planned)} of ${fmt(result.requested)} requested`:`Pick ${fmt(result.requested)} ${result.item}`);
+ const heading=make('div','find-result-head'),title=make('strong','',result.shortfall?`Located ${fmt(result.planned)} of ${fmt(result.requested)} requested`:`Pick ${fmt(result.requested)} ${result.item}`);
  heading.append(title,make('span',result.shortfall?'find-short':'find-complete',result.shortfall?'Partial route':'Ready to pick'));panel.append(heading);
+ if(result.steps.length){
+  const stats=make('div','find-route-stats');
+  for(const [value,label] of [[result.areaCount,'Areas to visit'],[result.blockCount,'Blocks to collect'],[result.planned,'Units located']]){const card=make('div','find-route-stat');card.append(make('strong','',fmt(value)),make('span','',label));stats.append(card);}
+  panel.append(stats);
+  renderFindMap(result,panel);
+ }
  if(!result.steps.length)panel.append(make('p','find-message','No immediately accessible stock is recorded in assigned blocks.'));
- const list=make('div','pick-list');result.steps.forEach((step,i)=>{
-  const row=make('button','pick-step');row.type='button';row.append(make('span','pick-number',String(i+1)));
-  const details=make('div','pick-location');details.append(make('strong','',`${step.areaName||step.areaId} · ${step.areaId} / ${step.blockId}`),make('span','',`Row ${step.row} · Column ${step.column}${step.mixed?' · Other assets also in this block':''}`));
-  row.append(details,make('span','pick-quantity',`Take ${fmt(step.take)}`));
-  row.setAttribute('aria-label',`Step ${i+1}: take ${fmt(step.take)} ${result.item} from ${step.areaId}, block ${step.blockId}`);
-  row.onclick=()=>{openDetails(step.areaId);openBlock(step.blockId);};list.append(row);
- });panel.append(list);
+ if(result.steps.length){
+  const title=make('h4','find-steps-title','Collection order');panel.append(title);
+  const list=make('div','pick-list');result.steps.forEach((step,i)=>{
+   const row=make('button','pick-step');row.type='button';row.dataset.pickIndex=String(step.number);row.append(make('span','pick-number',String(i+1)));
+   const details=make('div','pick-location');details.append(make('strong','',`${step.areaName||step.areaId} · ${step.areaId} / ${step.blockId}`),make('span','',`Row ${step.row} · Column ${step.column}${step.mixed?' · Other assets also in this block':''}`));
+   row.append(details,make('span','pick-quantity',`Take ${fmt(step.take)}`));
+   row.setAttribute('aria-label',`Step ${i+1}: take ${fmt(step.take)} ${result.item} from ${step.areaId}, block ${step.blockId}. Show on map.`);
+   row.onclick=()=>focusFindPick(step.number,'map');list.append(row);
+  });panel.append(list);
+ }
  if(result.shortfall)panel.append(make('p','find-warning',`Short by ${fmt(result.shortfall)}. Only ${fmt(result.accessible)} are reachable without moving other asset types.`));
  if(result.blocked)panel.append(make('p','find-footnote',`${fmt(result.blocked)} additional ${result.item} are behind other asset types in their columns. They are excluded from this pick route.`));
  if(result.unassigned)panel.append(make('p','find-footnote',`${fmt(result.unassigned)} ${result.item} are not assigned to a block and cannot be routed until they have a location.`));
- panel.append(make('p','find-footnote','Each column is accessed from its highest-numbered row (N) towards row 1. Empty blocks can be passed. A deeper block is only included after the front stock of that column is cleared. This is a read-only plan; verify the physical route before collecting.'));
+ panel.append(make('p','find-footnote','The route may combine blocks across multiple areas. Each column is accessed from its highest-numbered row (N) towards row 1. Empty blocks can be passed. Deeper stock is only picked after clearing stock in front. Find is read-only; check physical access before collecting.'));
 }
+
 function findAssets(e){e.preventDefault();
  const item=$('findItem').value,quantity=Number($('findQty').value);
  if(!item||!Number.isSafeInteger(quantity)||quantity<1){$('findResult').classList.remove('hidden');$('findResult').textContent='Choose an asset type and enter a positive whole quantity.';return;}
