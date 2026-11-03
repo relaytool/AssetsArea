@@ -4,7 +4,8 @@ window.STOCK_AREA_CONFIG = Object.freeze({
   OWNER_EMAIL: 'josiahfernandes002@gmail.com',
   OAUTH_CLIENT_ID: '50542963972-75ictdqcblqigj1iq30pobdqk06s1v93.apps.googleusercontent.com',
   POSITIONS_TAB: 'Area Positions',         // preserved: original 2-column map
-  ACTIVITY_TAB: 'Area Activity',           // preserved: movement history
+  ACTIVITY_TAB: 'Area Activity',
+  BLOCK_TRANSACTIONS_TAB: 'Block Transactions',           // preserved: movement history
   SETTINGS_TAB: 'Area Settings',           // preserved: legacy row count
   AREAS_TAB: 'Warehouse Areas',            // new: editable floor plan
   STOCK_TAB: 'Warehouse Stock',

@@ -2,7 +2,7 @@
 'use strict';
 const $=id=>document.getElementById(id), cfg=window.STOCK_AREA_CONFIG||{};
 const SHEET=String(cfg.SPREADSHEET_ID||''), BASE=`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(SHEET)}`;
-const tabs={legacy:cfg.POSITIONS_TAB||'Area Positions',activity:cfg.ACTIVITY_TAB||'Area Activity',settings:cfg.SETTINGS_TAB||'Area Settings',areas:cfg.AREAS_TAB||'Warehouse Areas',stock:cfg.STOCK_TAB||'Warehouse Stock',blockSettings:cfg.BLOCK_SETTINGS_TAB||'Warehouse Block Settings',blockStock:cfg.BLOCK_STOCK_TAB||'Warehouse Block Stock'};
+const tabs={legacy:cfg.POSITIONS_TAB||'Area Positions',activity:cfg.ACTIVITY_TAB||'Area Activity',settings:cfg.SETTINGS_TAB||'Area Settings',areas:cfg.AREAS_TAB||'Warehouse Areas',stock:cfg.STOCK_TAB||'Warehouse Stock',blockSettings:cfg.BLOCK_SETTINGS_TAB||'Warehouse Block Settings',blockStock:cfg.BLOCK_STOCK_TAB||'Warehouse Block Stock',blockTransactions:cfg.BLOCK_TRANSACTIONS_TAB||'Block Transactions'};
 const C=Number(cfg.BOARD_COLUMNS)||16,MIN_R=Number(cfg.BOARD_MIN_ROWS)||18,MAX_R=Number(cfg.BOARD_MAX_ROWS)||80;
 const AREA_HEADERS=['Area ID','Name','Zone','Type','X','Y','Width','Height','Color','Updated At','Active'];
 const STOCK_HEADERS=['Area ID','Item','Quantity','Updated At'];
@@ -12,12 +12,13 @@ function settingsRow(headers,id,rows,columns,stamp){return headers.map(h=>h==='a
 function settingsHeaderUpgrade(rows){const h=settingsHeaders(rows);return h.includes('columns')?null:{range:`'${tabs.blockSettings}'!D1`,values:[['Columns']]};}
 const BLOCK_STOCK_HEADERS=['Area ID','Block ID','Item','Quantity','Updated At'];
 const ACTIVITY_HEADERS=['Timestamp','Action','Item','Quantity','From','To','Note','By'];
+const TX_HEADERS=['Timestamp','Action','Area','Block','Asset Type','Quantity','From','To','Reason','By','Transaction ID'];
 const PRESETS=['Red sleeves','Wood Pallets','Magnum Bases','Blue Carbags'];
 const now=()=>new Date().toISOString(), fmt=n=>Number(n||0).toLocaleString('en-GB'), norm=s=>String(s??'').trim().toLocaleLowerCase('en-GB');
 const normalizedHeader=s=>norm(s).replace(/[^a-z0-9]/g,'');
 const dateText=s=>{const d=new Date(s);return Number.isFinite(+d)?d.toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):String(s||'')};
-let state={areas:[],stock:[],events:[],legacy:false,loaded:false,legacyAreas:[],legacyStock:[],blockSettings:[],blockStock:[],blocksReady:false};
-let bulkMode=false,bulkSelected=new Set(),findRequest=null;
+let state={areas:[],stock:[],events:[],blockTransactions:[],historyReady:false,legacy:false,loaded:false,legacyAreas:[],legacyStock:[],blockSettings:[],blockStock:[],blocksReady:false};
+let bulkMode=false,bulkSelected=new Set(),findRequest=null,mainView='warehouse',transactionLimit=50,blockMoveDrag=null,blockMoveTimer=0;
 let mode='viewer',token='',ownerEmail='',tokenClient=null,gisReady=false,designing=false,selectedId='',selectedBlock='',editingId='',stockAction='add',filterItem='',busy=false,toastTimer=0,loading=false,queuedLoad=false,drag=null,stockPress=null,stockPressTimer=0,stockDrop=null,ignoreClickUntil=0;
 const activeAreas=()=>state.areas.filter(a=>a.active);
 const getArea=id=>activeAreas().find(a=>norm(a.id)===norm(id));
@@ -47,6 +48,11 @@ function rowDict(headers,row){const obj={};headers.forEach((h,i)=>{obj[normalize
 const safeInt=(n,fallback=0)=>Number.isFinite(Number(n))?Math.trunc(Number(n)):fallback;
 function parseAreas(table){const h=table.headers||[];if(!h.some(x=>normalizedHeader(x)==='areaid'))throw new Error('Warehouse Areas header missing');return table.rows.map(row=>{const d=rowDict(h,row);return {id:String(d.areaid||'').trim(),name:String(d.name||'').trim(),zone:String(d.zone||'').trim(),type:String(d.type||'Holding').trim(),x:safeInt(d.x,1),y:safeInt(d.y,1),w:safeInt(d.width,3),h:safeInt(d.height,1),color:String(d.color||'green'),updatedAt:String(d.updatedat||''),active:!['FALSE','NO','0'].includes(String(d.active||'TRUE').toUpperCase())};}).filter(a=>a.id);}
 function parseStock(table){const h=table.headers||[];if(!h.some(x=>normalizedHeader(x)==='areaid')||!h.some(x=>normalizedHeader(x)==='quantity'))throw new Error('Warehouse Stock header missing');return table.rows.map(row=>{const d=rowDict(h,row);return {areaId:String(d.areaid||'').trim(),item:String(d.item||'').trim(),quantity:Math.max(0,Number(d.quantity)||0),updatedAt:String(d.updatedat||'')};}).filter(s=>s.areaId&&s.item&&s.quantity>0);}
+function parseTransactions(table){
+ const h=table.headers||[];
+ if(!h.some(v=>normalizedHeader(v)==='timestamp')||!h.some(v=>normalizedHeader(v)==='assettype'))return [];
+ return (table.rows||[]).map(row=>{const d=rowDict(h,row);return {timestamp:String(d.timestamp||''),action:String(d.action||''),area:String(d.area||''),block:String(d.block||''),item:String(d.assettype||''),quantity:Number(d.quantity)||0,from:String(d.from||''),to:String(d.to||''),reason:String(d.reason||''),by:String(d.by||''),id:String(d.transactionid||'')};}).filter(e=>e.timestamp);
+}
 function parseEvents(table){const h=table.headers||[];return table.rows.map(row=>{const d=rowDict(h,row);return {timestamp:String(d.timestamp||''),action:String(d.action||'Update'),item:String(d.item||''),quantity:Number(d.quantity)||0,from:String(d.from||''),to:String(d.to||''),note:String(d.note||''),by:String(d.by||'')};}).filter(e=>e.timestamp);}
 function parseLegacy(table,settings){const h=table.headers||[];if(!h.some(x=>normalizedHeader(x)==='position'))throw new Error('Legacy storage header missing');const rows=table.rows||[];const hi=h.map(normalizedHeader);const canonical=['position','row','lane','item','quantity'].every(x=>hi.includes(x));const col=k=>hi.indexOf(k);
  const old=rows.map(v=>{const at=k=>v[canonical?col(k):({position:0,row:1,lane:2,item:3,quantity:4,updatedat:5}[k])]??'';const id=String(at('position')).trim();return {id,row:safeInt(at('row'),Number(id.slice(1))||1),lane:String(at('lane')||id[0]).trim(),item:String(at('item')||'').trim(),quantity:Number(at('quantity'))||0};}).filter(v=>v.id);
@@ -58,7 +64,7 @@ function gviz(tab){return new Promise((resolve,reject)=>{const key=`warehouseRep
  script.src=`https://docs.google.com/spreadsheets/d/${encodeURIComponent(SHEET)}/gviz/tq?sheet=${encodeURIComponent(tab)}&headers=1&tqx=${encodeURIComponent('responseHandler:'+key)}&_=${Date.now()}`;
  script.onerror=()=>finish(new Error('Cannot load '+tab));document.head.appendChild(script);});}
 async function loadData(show=true){if(loading){queuedLoad=true;return;}loading=true;if(show)connection('Refreshing…');try{
- const [areas,stock,events,blockSettings,blockStock]=await Promise.allSettled([gviz(tabs.areas),gviz(tabs.stock),gviz(tabs.activity),gviz(tabs.blockSettings),gviz(tabs.blockStock)]);
+ const [areas,stock,events,blockSettings,blockStock,transactions]=await Promise.allSettled([gviz(tabs.areas),gviz(tabs.stock),gviz(tabs.activity),gviz(tabs.blockSettings),gviz(tabs.blockStock),gviz(tabs.blockTransactions)]);
  if(areas.status==='fulfilled'&&stock.status==='fulfilled'){
    state.areas=parseAreas(areas.value);state.stock=parseStock(stock.value);state.legacy=false;state.loaded=true;notice();
  }else{
@@ -69,6 +75,7 @@ async function loadData(show=true){if(loading){queuedLoad=true;return;}loading=t
    if(areas.status==='fulfilled'||stock.status==='fulfilled')notice('Warehouse setup is incomplete. The original storage map is shown until the owner finishes setup.');else notice('The original storage area is shown. The owner can activate the new warehouse layout.');
  }
  if(events.status==='fulfilled'){state.events=parseEvents(events.value);}
+ if(transactions.status==='fulfilled'){state.blockTransactions=parseTransactions(transactions.value);state.historyReady=true;}else{state.historyReady=false;state.blockTransactions=[];}
    // Parse independently: a missing/empty stock tab must not reset saved area grid dimensions.
    const blockIssues=[];let settingsOK=false,stockOK=false;
    if(blockSettings.status==='fulfilled')try{state.blockSettings=parseBlockSettings(blockSettings.value);settingsOK=true;}catch(e){blockIssues.push(`${tabs.blockSettings}: ${e.message}`);}
@@ -86,7 +93,7 @@ function render(){const owner=isOwner();$('modePill').textContent=owner?'OWNER E
  $('ownerButton').textContent=owner?'Lock editing':'Owner edit';$('ownerButton').classList.toggle('btn-dark',!owner);
  $('setupButton').classList.toggle('hidden',!owner||!state.legacy);$('designButton').classList.toggle('hidden',!owner||state.legacy);$('addAreaButton').classList.toggle('hidden',!owner||state.legacy||!designing);$('enableBlocks').classList.toggle('hidden',!owner||state.legacy||state.blocksReady);
  if(!owner)designing=false;$('designButton').textContent=designing?'Finish design':'Design layout';$('designerHint').classList.toggle('hidden',!designing);$('mapDescription').textContent=designing?'Arrange and resize your holding areas.':owner&&!state.legacy?'Select an area, or long-press a stocked block to move its contents.':'Select an area to view its contents.';
- renderSummary();renderFindChoices();renderFindResult();renderBoard();renderList();renderActivity();if(selectedId&&$('detailsOverlay').classList.contains('open'))renderDetails(false);if($('mapOverlay').classList.contains('open'))renderFocusMap();
+ renderSummary();renderFindChoices();renderFindResult();renderBoard();renderList();renderActivity();renderBlockTransactions();if(selectedId&&$('detailsOverlay').classList.contains('open'))renderDetails(false);if($('mapOverlay').classList.contains('open'))renderFocusMap();
 }
 function renderSummary(){const groups=new Map(PRESETS.map(name=>[norm(name),{name,qty:0,areas:new Set()}]));for(const s of [...state.stock,...state.blockStock]){if(!getArea(s.areaId))continue;const key=norm(s.item),found=groups.get(key)||{name:s.item,qty:0,areas:new Set()};found.qty+=s.quantity;found.areas.add(norm(s.areaId));groups.set(key,found);}
  const order=[...groups.values()].sort((a,b)=>{const ia=PRESETS.findIndex(x=>norm(x)===norm(a.name)),ib=PRESETS.findIndex(x=>norm(x)===norm(b.name));return (ia<0?999:ia)-(ib<0?999:ib)||a.name.localeCompare(b.name);});const el=$('summary');el.replaceChildren();for(const group of order){const card=make('button','summary-card '+assetColor(group.name));card.type='button';card.setAttribute('aria-pressed',String(norm(group.name)===filterItem));card.setAttribute('aria-label',`${group.name}: ${fmt(group.qty)} in ${group.areas.size} areas`);card.append(make('span','name',group.name),make('strong','',fmt(group.qty)),make('small','',`${group.areas.size} ${group.areas.size===1?'area':'areas'}`));card.onclick=()=>{filterItem=filterItem===norm(group.name)?'':norm(group.name);render();};el.append(card);}$('clearFilter').classList.toggle('hidden',!filterItem);}
@@ -111,7 +118,7 @@ function renderFindMap(result,panel){
  if(!result.steps.length)return;
  const groups=result.areasUsed||[],areaGroups=new Map(groups.map((group,i)=>[norm(group.areaId),{...group,order:i+1}]));
  const section=make('section','find-visual');section.setAttribute('aria-label','Visual picking map');
- const top=make('div','find-visual-head');top.append(make('div','find-visual-title','Visual picking map'),make('span','find-visual-hint','Numbered markers show where to collect'));section.append(top);
+ const top=make('div','find-visual-head');top.append(make('div','find-visual-title','Visual picking map'),make('span','find-visual-hint','Follow the numbered steps; orange blocks are clearances'));section.append(top);
  const overview=make('div','find-overview');
  const mapHead=make('div','find-map-heading');mapHead.append(make('strong','','Warehouse overview'),make('span','',`${groups.length} ${groups.length===1?'area':'areas'} · ${result.steps.length} ${result.steps.length===1?'block':'blocks'} on this route`));overview.append(mapHead);
  const mapScroll=make('div','find-floor-scroll'),map=make('div','warehouse-board find-overview-board');
@@ -119,14 +126,14 @@ function renderFindMap(result,panel){
  map.style.setProperty('--cols',C);map.style.setProperty('--rows',Math.min(MAX_R,rows));
  for(const area of visible){
   const group=areaGroups.get(norm(area.id)),tile=make(group?'button':'div',`map-block find-floor-area color-${area.color}`+(group?' find-target-area':' find-dim-area'));
-  if(group){tile.type='button';tile.setAttribute('aria-label',`Stop ${group.order}: ${area.name}, ${group.steps.length} blocks, collect ${fmt(group.quantity)} ${result.item}`);tile.onclick=()=>{$(`findArea_${group.order}`)?.scrollIntoView({block:'start',behavior:'smooth'});};}
+  if(group){tile.type='button';tile.setAttribute('aria-label',`Stop ${group.order}: ${area.name}, empty ${group.steps.length} blocks to retrieve ${fmt(group.quantity)} ${result.item}`);tile.onclick=()=>{$(`findArea_${group.order}`)?.scrollIntoView({block:'start',behavior:'smooth'});};}
   tile.style.gridColumn=`${area.x} / span ${area.w}`;tile.style.gridRow=`${area.y} / span ${area.h}`;
   tile.append(make('span','block-id',area.id),make('span','block-name',area.name));
   if(group){tile.append(make('span','find-floor-badge',`STOP ${group.order} · ${group.steps.length} ${group.steps.length===1?'BLOCK':'BLOCKS'}`));}
   map.append(tile);
  }
  mapScroll.append(map);overview.append(mapScroll);
- overview.append(make('p','find-map-hint','Highlighted areas are part of your collection route. Select an area to jump to its blocks.'));
+ overview.append(make('p','find-map-hint','Green = collect requested asset; amber = clear another asset first. Follow the step numbers in order.'));
  section.append(overview);
  const cards=make('div','find-area-maps');
  for(let groupIndex=0;groupIndex<groups.length;groupIndex++){
@@ -135,17 +142,17 @@ function renderFindMap(result,panel){
   const occupied=new Map();for(const stock of state.blockStock)if(norm(stock.areaId)===norm(area.id)&&stock.quantity>0){const key=norm(stock.blockId);occupied.set(key,(occupied.get(key)||0)+stock.quantity);}
   const card=make('section','find-area-map');card.id=`findArea_${groupIndex+1}`;card.setAttribute('aria-label',`${group.areaName} block map`);
   const header=make('div','find-area-map-head'),number=make('span','find-area-order',String(groupIndex+1)),copy=make('div','find-area-heading');
-  copy.append(make('strong','',`${group.areaName} · ${group.areaId}`),make('span','',`${rows} rows × ${columns} columns · Collect ${fmt(group.quantity)} ${result.item}`));
+  copy.append(make('strong','',`${group.areaName} · ${group.areaId}`),make('span','',`${rows} rows × ${columns} columns · Retrieve ${fmt(group.quantity)} ${result.item}`));
   header.append(number,copy,make('span','find-block-count',`${group.steps.length} ${group.steps.length===1?'block':'blocks'}`));card.append(header);
   const wrap=make('div','find-mini-scroll'),grid=make('div','find-mini-grid');grid.style.gridTemplateColumns=`repeat(${columns},minmax(67px,1fr))`;
   for(let row=1;row<=rows;row++)for(let col=1;col<=columns;col++){
    const id=blockColumnLabel(col)+String(row).padStart(2,'0'),step=selected.get(norm(id)),total=occupied.get(norm(id))||0;
-   const cell=make(step?'button':'div',`find-mini-cell${step?' is-selected':total?' is-stocked':' is-empty'}`);
+   const cell=make(step?'button':'div',`find-mini-cell${step?' is-selected'+(step.kind==='clear'?' is-clear':''):total?' is-stocked':' is-empty'}`);
    cell.dataset.block=id;
    cell.append(make('span','find-cell-id',id));
    if(step){
-    const index=step.number;cell.type='button';cell.dataset.pickIndex=String(index);cell.setAttribute('aria-label',`Pick ${index}, ${area.name}, block ${id}: take ${fmt(step.take)} ${result.item}. Open block contents.`);
-    cell.append(make('span','find-cell-pin',`#${index}`),make('span','find-cell-qty',`Take ${fmt(step.take)}`));
+    const index=step.number;cell.type='button';cell.dataset.pickIndex=String(index);cell.setAttribute('aria-label',`Step ${index}, ${area.name}, ${step.kind==='clear'?'clear obstructing stock from':'collect '+fmt(step.quantity)+' '+result.item+' from'} block ${id}. Open block contents.`);
+    cell.append(make('span','find-cell-pin',`#${index}`),make('span','find-cell-qty',step.kind==='clear'?'CLEAR FIRST':`Take ${fmt(step.quantity)}`));
     cell.onclick=()=>{openDetails(area.id);openBlock(id);};
    }else if(total){cell.append(make('span','find-cell-stock','Occupied'));}
    grid.append(cell);
@@ -153,7 +160,7 @@ function renderFindMap(result,panel){
   wrap.append(grid);card.append(wrap);
   const foot=make('div','find-area-entry');foot.append(make('span','find-entry-arrow','↑'),make('span','',`ACCESS FROM ROW ${rows} (N) · MOVE TOWARDS ROW 1`));card.append(foot);
   const summary=make('div','find-area-stops');
-  for(const step of group.steps){const chip=make('button','find-area-stop-chip',`#${step.number}  ${step.blockId} · ${fmt(step.take)}`);chip.type='button';chip.onclick=()=>focusFindPick(step.number,'map');summary.append(chip);}
+  for(const step of group.steps){const chip=make('button','find-area-stop-chip',`#${step.number} ${step.blockId} · ${step.kind==='clear'?'CLEAR':`Take ${fmt(step.quantity)}`}`);chip.type='button';chip.onclick=()=>focusFindPick(step.number,'map');summary.append(chip);}
   card.append(summary);cards.append(card);
  }
  section.append(cards);panel.append(section);
@@ -164,29 +171,34 @@ function renderFindResult(){
  let result;try{
   result=window.WarehouseRetrieval.plan({areas:state.areas,blockSettings:state.blockSettings,blockStock:state.blockStock,looseStock:state.stock,item:findRequest.item,quantity:findRequest.quantity});
  }catch(err){panel.append(make('p','form-error',err.message));return;}
- const heading=make('div','find-result-head'),title=make('strong','',result.shortfall?`Located ${fmt(result.planned)} of ${fmt(result.requested)} requested`:`Pick ${fmt(result.requested)} ${result.item}`);
- heading.append(title,make('span',result.shortfall?'find-short':'find-complete',result.shortfall?'Partial route':'Ready to pick'));panel.append(heading);
+ const heading=make('div','find-result-head'),title=make('strong','',result.shortfall?`Route finds ${fmt(result.planned)} of ${fmt(result.requested)} ${result.item}`:`${fmt(result.blockCount)} blocks in order · collect ${fmt(result.planned)} ${result.item}`);
+ heading.append(title,make('span',result.shortfall?'find-short':'find-complete',result.shortfall?'Insufficient recorded stock':'Request covered'));panel.append(heading);
  if(result.steps.length){
   const stats=make('div','find-route-stats');
-  for(const [value,label] of [[result.areaCount,'Areas to visit'],[result.blockCount,'Blocks to collect'],[result.planned,'Units located']]){const card=make('div','find-route-stat');card.append(make('strong','',fmt(value)),make('span','',label));stats.append(card);}
+  for(const [value,label] of [[result.areaCount,'Areas to visit'],[result.blockCount,'Blocks in route'],[result.planned,'Target units collected']]){const card=make('div','find-route-stat');card.append(make('strong','',fmt(value)),make('span','',label));stats.append(card);}
   panel.append(stats);
+  if(result.excess)panel.append(make('p','find-surplus',`Whole-block removal: ${fmt(result.requested)} ${result.item} needed; the marked blocks contain ${fmt(result.planned)}. That is ${fmt(result.excess)} extra. All marked blocks will be emptied completely.`));
   renderFindMap(result,panel);
  }
- if(!result.steps.length)panel.append(make('p','find-message','No immediately accessible stock is recorded in assigned blocks.'));
+ if(!result.steps.length)panel.append(make('p','find-message','No matching stock is assigned to storage blocks.'));
  if(result.steps.length){
-  const title=make('h4','find-steps-title','Collection order');panel.append(title);
+  const title=make('h4','find-steps-title','Step-by-step removal order');panel.append(title);
   const list=make('div','pick-list');result.steps.forEach((step,i)=>{
-   const row=make('button','pick-step');row.type='button';row.dataset.pickIndex=String(step.number);row.append(make('span','pick-number',String(i+1)));
-   const details=make('div','pick-location');details.append(make('strong','',`${step.areaName||step.areaId} · ${step.areaId} / ${step.blockId}`),make('span','',`Row ${step.row} · Column ${step.column}${step.mixed?' · Other assets also in this block':''}`));
-   row.append(details,make('span','pick-quantity',`Take ${fmt(step.take)}`));
-   row.setAttribute('aria-label',`Step ${i+1}: take ${fmt(step.take)} ${result.item} from ${step.areaId}, block ${step.blockId}. Show on map.`);
+   const row=make('button','pick-step'+(step.kind==='clear'?' is-clear':''));row.type='button';row.dataset.pickIndex=String(step.number);row.append(make('span','pick-number',String(i+1)));
+   const details=make('div','pick-location');details.append(make('strong','',`${step.areaName||step.areaId} · ${step.areaId} / ${step.blockId}`),make('span','',step.kind==='clear'?`CLEAR FIRST · ${step.otherItems.map(s=>`${fmt(s.quantity)} ${s.item}`).join(', ')} · Opens access to the next block`:`COLLECT · Row ${step.row} · Column ${step.column}${step.mixed?' · Also empty the other assets in this block':''}`));
+   row.append(details,make('span','pick-quantity',step.kind==='clear'?'Clear block':`Take ${fmt(step.quantity)}`));
+   row.setAttribute('aria-label',`Step ${i+1}: ${step.kind==='clear'?'clear other assets from':`collect ${fmt(step.quantity)} ${result.item} from`} ${step.areaId}, block ${step.blockId}. Show on map.`);
    row.onclick=()=>focusFindPick(step.number,'map');list.append(row);
   });panel.append(list);
  }
- if(result.shortfall)panel.append(make('p','find-warning',`Short by ${fmt(result.shortfall)}. Only ${fmt(result.accessible)} are reachable without moving other asset types.`));
- if(result.blocked)panel.append(make('p','find-footnote',`${fmt(result.blocked)} additional ${result.item} are behind other asset types in their columns. They are excluded from this pick route.`));
+ if(result.shortfall)panel.append(make('p','find-warning',`Short by ${fmt(result.shortfall)} ${result.item}. The route includes all ${fmt(result.accessible)} located target units, including those reached by clearing occupied blocks first.`));
+ if(result.otherRemoved){
+  const extras=new Map();for(const step of result.steps)for(const other of step.otherItems||[]){const key=norm(other.item),previous=extras.get(key)||{item:other.item,quantity:0};previous.quantity+=other.quantity;extras.set(key,previous);}
+  panel.append(make('p','find-warning',`The numbered route includes ${[...extras.values()].map(x=>`${fmt(x.quantity)} ${x.item}`).join(', ')} of OTHER assets to clear or relocate. These do not count toward your ${result.item} request.`));
+ }
+ if(result.clearanceCount)panel.append(make('p','find-footnote',`${result.clearanceCount} clearance step(s) unlock the requested stock behind other assets. Each preceding block must actually be emptied before proceeding deeper.`));
  if(result.unassigned)panel.append(make('p','find-footnote',`${fmt(result.unassigned)} ${result.item} are not assigned to a block and cannot be routed until they have a location.`));
- panel.append(make('p','find-footnote','The route may combine blocks across multiple areas. Each column is accessed from its highest-numbered row (N) towards row 1. Empty blocks can be passed. Deeper stock is only picked after clearing stock in front. Find is read-only; check physical access before collecting.'));
+ panel.append(make('p','find-footnote','Follow #1, #2, #3… in order. Once a block is emptied its space is available and the next marked block in that column can be reached. No partial blocks are selected. Find is read-only; update the warehouse inventory separately as each movement actually happens. Verify physical access and where cleared non-target assets will go.'));
 }
 
 function findAssets(e){e.preventDefault();
@@ -206,11 +218,56 @@ function renderList(){const wrap=$('areaList');wrap.replaceChildren();const sear
  if(!areas.length)wrap.append(make('p','none',search?'No matching areas.':'No areas have been created yet.'));
 }
 function renderActivity(){const els=[...state.events].sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));$('activityCount').textContent=`${els.length} events`;const target=$('activityList');target.replaceChildren();if(!els.length){target.append(make('p','content-empty','No movements recorded yet.'));return;}for(const e of els.slice(0,25)){const row=make('div','event'),action=norm(e.action);row.append(make('div','event-icon',action.includes('move')?'⇄':action.includes('clear')?'×':action.includes('remove')?'−':'+'));const info=make('div');let sentence='';if(action.includes('move'))sentence=`Moved ${fmt(e.quantity)} ${e.item} · ${e.from} → ${e.to}`;else if(action.includes('clear'))sentence=`Cleared ${fmt(e.quantity)} ${e.item} · ${e.from}`;else if(action.includes('remove'))sentence=`Removed ${fmt(e.quantity)} ${e.item} · ${e.from}`;else if(action.includes('add'))sentence=`Added ${fmt(e.quantity)} ${e.item} · ${e.to}`;else sentence=[e.action,e.item,e.from||e.to].filter(Boolean).join(' · ');info.append(make('div','event-main',sentence),make('div','event-meta',[dateText(e.timestamp),e.note].filter(Boolean).join(' · ')));row.append(info);target.append(row);}}
+function showMainView(view){
+ mainView=view==='transactions'?'transactions':'warehouse';
+ const showing=mainView==='warehouse';
+ for(const id of ['findPanel','activity'])$(id).classList.toggle('hidden',!showing);
+ for(const selector of ['.intro','.summary-section','.workspace']){const element=document.querySelector(selector);if(element)element.classList.toggle('hidden',!showing);}
+ $('transactionsPage').classList.toggle('hidden',showing);
+ for(const [id,on] of [['warehouseTab',showing],['transactionsTab',!showing]]){$(id).classList.toggle('active',on);if(on)$(id).setAttribute('aria-current','page');else $(id).removeAttribute('aria-current');}
+ if(!showing)renderBlockTransactions();
+}
+function renderBlockTransactions(){
+ const list=$('transactionsList');list.replaceChildren();
+ const type=$('transactionType').value,search=norm($('transactionSearch').value);
+ const history=state.blockTransactions.filter(e=>(type==='all'||(type==='remove'?/remove|clear/i.test(e.action):type==='move'?/move/i.test(e.action):/add/i.test(e.action)))&&(!search||norm([e.timestamp,e.action,e.area,e.block,e.item,e.quantity,e.from,e.to,e.reason,e.by].join(' ')).includes(search))).sort((a,b)=>String(b.timestamp).localeCompare(String(a.timestamp)));
+ $('transactionCount').textContent=`${fmt(history.length)} ${history.length===1?'transaction':'transactions'}`;
+ if(!history.length){list.append(make('p','content-empty',state.historyReady?'No block transactions match your filters.':'The Block Transactions sheet has not been created yet. It is created automatically when the owner next saves a block movement. Earlier movements remain in Recent movements.'));$('transactionsMore').classList.add('hidden');return;}
+ for(const e of history.slice(0,transactionLimit)){
+  const row=make('article','transaction-row'),left=make('div'),right=make('div','tx-qty');
+  const header=make('div','tx-main'),tag=make('span','tx-action '+(/remove|clear/i.test(e.action)?'remove':/move/i.test(e.action)?'move':''),e.action);
+  header.append(tag,document.createTextNode(`${e.item} · ${e.area}/${e.block}`));
+  left.append(header,make('div','tx-meta',[dateText(e.timestamp),e.from&&'From '+e.from,e.to&&'To '+e.to,e.by].filter(Boolean).join(' · ')));
+  if(e.reason)left.append(make('div','tx-reason','Reason: '+e.reason));
+  right.textContent=fmt(e.quantity);row.append(left,right);list.append(row);
+ }
+ $('transactionsMore').classList.toggle('hidden',history.length<=transactionLimit);
+}
+// Owner-only one-time setup. The existing Area Activity tab is retained.
+async function ensureBlockTransactions(){
+ const meta=await api('?fields=sheets(properties(title))'),known=new Set((meta.sheets||[]).map(x=>x.properties.title));
+ if(!known.has(tabs.blockTransactions))await api(':batchUpdate',{method:'POST',body:JSON.stringify({requests:[{addSheet:{properties:{title:tabs.blockTransactions,gridProperties:{rowCount:1000,columnCount:12}}}}]})});
+ let data=await readApiTab(tabs.blockTransactions,'A:K');
+ if(!data.length||!data[0]?.some(x=>String(x||'').trim())){await apiWrites([{range:`'${tabs.blockTransactions}'!A1:K1`,values:[TX_HEADERS]}]);data=await readApiTab(tabs.blockTransactions,'A:K');}
+ verifyApiHeader(data,TX_HEADERS);
+ state.historyReady=true;
+}
+async function appendBlockTransactions(events){
+ if(!events.length)return;
+ const payload=events.map((e,i)=>{
+  const location=/^([^/]+)\/([^/]+)$/.exec(String(e.from||''))||/^([^/]+)\/([^/]+)$/.exec(String(e.to||''));
+  const area=location?.[1]||'',block=location?.[2]||'';
+  return [e.timestamp,e.action,area,block,e.item,e.quantity,e.from||'',e.to||'',e.reason||'',ownerEmail,`${e.timestamp}-${i+1}`];
+ });
+ await api(`/values/${encodeURIComponent("'"+tabs.blockTransactions+"'!A:K")}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,{method:'POST',body:JSON.stringify({values:payload})});
+ for(const row of payload)state.blockTransactions.push({timestamp:row[0],action:row[1],area:row[2],block:row[3],item:row[4],quantity:row[5],from:row[6],to:row[7],reason:row[8],by:row[9],id:row[10]});
+ renderBlockTransactions();
+}
 function areaURL(id){const u=new URL(window.location.href);u.searchParams.set('area',id);u.searchParams.delete('block');u.hash='';return u.toString();}
 function changeURL(id,replace=false){const u=new URL(location.href);if(id){u.searchParams.set('area',id);u.searchParams.delete('block');}else{u.searchParams.delete('area');u.searchParams.delete('block');}history[replace?'replaceState':'pushState']({},'',u.pathname+u.search+u.hash);}
 function focusRoute(on){document.documentElement.classList.toggle('area-route',on);document.body.classList.toggle('area-focus',on);$('areaLoading').classList.toggle('hidden',!on);}
 function openFromURL(){const q=new URLSearchParams(location.search),id=q.get('area');if(!id){if(selectedId)closeDetails(false);else focusRoute(false);return;}if(!state.loaded)return;const a=getArea(id);if(a){if(selectedId!==a.id)openDetails(a.id,false);else focusRoute(true);const block=q.get('block');if(block&&validBlock(a.id,block)){if(selectedBlock!==block)openBlock(block,false);}else if(selectedBlock)closeBlock(false);}else{toast(`Area ${id} was not found.`);changeURL('',true);closeDetails(false);focusRoute(false);notice(`Area ${id} was not found. Check the link or select an area from the warehouse overview.`,'error');}}
-function openDetails(id,update=true){const a=getArea(id);if(!a)return;if(norm(selectedId)!==norm(a.id)){bulkMode=false;bulkSelected.clear();}selectedId=a.id;selectedBlock='';stockAction='add';$('stockForm').reset();$('stockQty').value='1';setError('stockError','');$('linkStatus').textContent='';renderDetails(true);focusRoute(true);$('areaLoading').classList.add('hidden');openOverlay('detailsOverlay');if(update)changeURL(a.id);}
+function openDetails(id,update=true){const a=getArea(id);if(!a)return;showMainView('warehouse');if(norm(selectedId)!==norm(a.id)){bulkMode=false;bulkSelected.clear();}selectedId=a.id;selectedBlock='';stockAction='add';$('stockForm').reset();$('stockQty').value='1';setError('stockError','');$('linkStatus').textContent='';renderDetails(true);focusRoute(true);$('areaLoading').classList.add('hidden');openOverlay('detailsOverlay');if(update)changeURL(a.id);}
 function renderDetails(resetStock=false){const a=getArea(selectedId);if(!a){closeDetails(true);return;}$('areaType').textContent=a.type.toUpperCase();$('areaTitle').textContent=a.name;$('areaSubtitle').textContent=a.id; $('areaViewMode').textContent=isOwner()?'OWNER EDIT':'VIEW ONLY';$('areaOwnerButton').textContent=isOwner()?'Lock editing':'Owner edit';
  const tags=$('areaMeta');tags.replaceChildren();for(const t of [a.id,a.zone,a.type].filter(Boolean))tags.append(make('span','',t));const items=stockAt(a.id).sort((a,b)=>a.item.localeCompare(b.item));renderBlockGrid(a.id);$('areaItemCount').textContent=`${items.length} ${items.length===1?'type':'types'}`;const wrap=$('contents');wrap.replaceChildren();for(const s of items){const row=make('div','content-row');row.append(make('span','content-name',s.item),make('span','content-qty',fmt(s.quantity)));wrap.append(row);}if(!items.length)wrap.append(make('div','content-empty','Nothing stored in this area.'));
  const enabled=isOwner()&&!state.legacy&&canHold(a)&&looseStockAt(a.id).length>0;$('ownerStockPanel').classList.toggle('hidden',!enabled);$('clearArea').disabled=!items.length;$('transferPanel').classList.toggle('hidden',!looseStockAt(a.id).length);if(items.length){const dest=$('transferTo'),previous=dest.value;dest.replaceChildren();dest.append(new Option('Choose destination area',''));for(const other of activeAreas().filter(other=>norm(other.id)!==norm(a.id)&&canHold(other)).sort((x,y)=>x.id.localeCompare(y.id,undefined,{numeric:true})))dest.append(new Option(`${other.id} · ${other.name}`,other.id));if([...dest.options].some(o=>o.value===previous))dest.value=previous;}
@@ -260,7 +317,7 @@ async function addOrRemove(e){e.preventDefault();if(!selectedId||busy)return;set
  $('saveStock').disabled=true;try{await transactStock([id],desired=>{const m=desired.get(norm(id)),key=norm(item),old=m.get(key);if(stockAction==='remove'){if(!old||old.quantity<qty)throw new Error('Not enough of that item in this area.');m.set(key,{...old,quantity:old.quantity-qty});}else{const stored=old?.item||item;m.set(key,{areaId:id,item:stored,quantity:(old?.quantity||0)+qty});}},(_prev,_next,timestamp)=>[{timestamp,action:stockAction==='add'?'Add':'Remove',item,quantity:qty,from:stockAction==='remove'?id:'',to:stockAction==='add'?id:'',note:''}]);renderDetails(true);
  }catch(err){setError('stockError',err.message||'Could not save stock.');}finally{$('saveStock').disabled=false;}}
 async function clearArea(){const a=getArea(selectedId);if(!a||!isOwner()||busy)return;const items=stockAt(a.id);if(!items.length)return;const list=items.map(s=>`• ${s.item}: ${fmt(s.quantity)}`).join('\n');if(!confirm(`Empty ALL stock from ${a.name} (${a.id})?\n\n${list}\n\nThis will remove every item type from this area and record the movement.`))return;
- $('clearArea').disabled=true;try{await clearEntireArea(a.id);renderDetails(true);}catch(err){toast(err.message||'Could not clear area.');}finally{$('clearArea').disabled=false;}}
+ $('clearArea').disabled=true;try{await clearEntireArea(a.id,$('areaClearReason').value.trim());$('areaClearReason').value='';renderDetails(true);}catch(err){toast(err.message||'Could not clear area.');}finally{$('clearArea').disabled=false;}}
 async function moveContents(fromId,toId){const a=getArea(fromId),b=getArea(toId);if(!a||!b||!canHold(b)||!looseStockAt(fromId).length)return;if(!confirm(`Move all stock from ${a.id} to ${b.id}? Items already in ${b.id} will be combined by asset type.`))return;
  try{await transactStock([fromId,toId],desired=>{const src=desired.get(norm(fromId)),dst=desired.get(norm(toId));for(const [key,item] of src){const old=dst.get(key);dst.set(key,{areaId:toId,item:old?.item||item.item,quantity:(old?.quantity||0)+item.quantity});}src.clear();},(before,_after,timestamp)=>[...before.get(norm(fromId)).values()].map(s=>({timestamp,action:'Move',item:s.item,quantity:s.quantity,from:fromId,to:toId,note:'All contents moved'})));}catch(err){toast(err.message);}}
 async function saveAreaRemote(a){if(!isOwner()||state.legacy)throw new Error('Owner edit required.');if(busy)throw new Error('Another save is in progress.');const problem=validateRect(a,a.id);if(problem)throw new Error(problem);busy=true;connection('Saving layout…');try{
@@ -301,7 +358,7 @@ function renderBulk(){
  if(!permitted){bulkMode=false;bulkSelected.clear();}
  $('bulkToolbar').classList.toggle('hidden',!permitted);
  $('bulkStart').classList.toggle('hidden',bulkMode);$('bulkSelectAll').classList.toggle('hidden',!bulkMode);$('bulkCancel').classList.toggle('hidden',!bulkMode);
- $('bulkHint').textContent=bulkMode?'Tap stocked blocks to select or deselect. Each selected block will be emptied.':'Remove the full contents of several blocks in one operation.';
+ $('bulkHint').textContent=bulkMode?'Tap to select; drag any selected block onto a destination to move all selected stock. Or remove them together below.':'Select blocks for bulk removal, or drag one block onto another to move its contents.';
  const valid=[...bulkSelected].filter(id=>blockStockAt(selectedId,id).length>0&&validBlock(selectedId,id));
  bulkSelected=new Set(valid);
  $('bulkSummary').classList.toggle('hidden',!permitted||!bulkMode);
@@ -327,14 +384,14 @@ async function removeBulk(){
  const totals=new Map();for(const id of blocks)for(const s of blockStockAt(area,id)){
   const key=norm(s.item),e=totals.get(key)||{item:s.item,quantity:0};e.quantity+=s.quantity;totals.set(key,e);
  }
- const summary=[...totals.values()].map(s=>`• ${s.item}: ${fmt(s.quantity)}`).join('\n');
+ const summary=[...totals.values()].map(s=>`• ${s.item}: ${fmt(s.quantity)}`).join('\n'),reason=$('bulkReason').value.trim();
  if(!confirm(`Empty ${blocks.length} selected blocks in ${area}?\n\n${summary}\n\nThe full contents of each selected block will be removed from inventory and logged.`))return;
  $('bulkRemove').disabled=true;setError('bulkError','');
  try{
   await transactBlockStock(blocks.map(id=>[area,id]),current=>{
    for(const id of blocks)current.get(blockKey(area,id)).clear();
-  },(before,stamp)=>blocks.flatMap(id=>[...before.get(blockKey(area,id)).values()].map(s=>({timestamp:stamp,action:'Bulk remove',item:s.item,quantity:s.quantity,from:`${area}/${id}`,to:'',note:`Bulk removal of ${blocks.length} blocks`}))));
-  bulkMode=false;bulkSelected.clear();renderDetails(false);
+  },(before,stamp)=>blocks.flatMap(id=>[...before.get(blockKey(area,id)).values()].map(s=>({timestamp:stamp,action:'Bulk remove',item:s.item,quantity:s.quantity,from:`${area}/${id}`,to:'',note:`Bulk removal of ${blocks.length} blocks${reason?' · Reason: '+reason:''}`,reason}))));
+  bulkMode=false;bulkSelected.clear();$('bulkReason').value='';renderDetails(false);
  }catch(err){setError('bulkError',err.message||'Bulk removal failed. Refresh and check stock.');renderBulk();}
  finally{$('bulkRemove').disabled=false;}
 }
@@ -346,7 +403,7 @@ function renderBlockGrid(areaId){
  $('blockMapCount').textContent=`${rows} rows × ${columns} columns · ${rows*columns} blocks`;
  $('blockAccessCaption').textContent=`Access from row ${rows} (N), working towards row 1. Tap a block to view its contents.`;
  $('rowSettings').classList.toggle('hidden',!isOwner()||state.legacy||!canHold(area));
- $('blockRowCount').value=rows;$('blockColumnCount').value=columns;const hasStock=stockAt(areaId).length>0;$('clearWholeArea').classList.toggle('hidden',!isOwner()||state.legacy||!hasStock);$('clearWholeArea').disabled=!hasStock;
+ $('blockRowCount').value=rows;$('blockColumnCount').value=columns;const hasStock=stockAt(areaId).length>0;$('clearWholeArea').classList.toggle('hidden',!isOwner()||state.legacy||!hasStock);$('areaClearReasonField').classList.toggle('hidden',!isOwner()||state.legacy||!hasStock);$('clearWholeArea').disabled=!hasStock;
  $('blocksDisabled').classList.toggle('hidden',canHold(area));
  $('blockGridWrap').classList.toggle('hidden',!canHold(area));
  if(!canHold(area)){renderBulk();return;}
@@ -356,11 +413,61 @@ function renderBlockGrid(areaId){
   el.type='button';el.dataset.block=id;el.setAttribute('aria-label',`${areaId} block ${id}, ${contents.length} item types`);
   el.append(make('strong','inner-id',id),make('span','inner-note',contents.length?contents.map(s=>`${s.item}: ${fmt(s.quantity)}`).join(' · '):'Empty'));
   el.setAttribute('aria-pressed',String(bulkMode&&bulkSelected.has(id)));if(bulkMode&&!contents.length)el.disabled=true;
-  el.onclick=()=>bulkMode?toggleBulkBlock(id):openBlock(id);grid.append(el);
+  el.onclick=()=>{if(Date.now()<ignoreClickUntil)return;bulkMode?toggleBulkBlock(id):openBlock(id);};if(isOwner()&&state.blocksReady&&contents.length)el.addEventListener('pointerdown',e=>beginBlockMove(e,areaId,id,el));grid.append(el);
  }
  const loose=looseStockAt(areaId),legacy=$('unassignedPanel');$('assignLoosePanel').classList.toggle('hidden',!isOwner()||!state.blocksReady||!loose.length);const dest=$('assignLooseTo'),prior=dest.value;dest.replaceChildren();dest.append(new Option('Choose target block',''));for(const id of blockIds(rows,columns))dest.append(new Option(`Block ${id}`,id));if([...dest.options].some(o=>o.value===prior))dest.value=prior;legacy.classList.toggle('hidden',!loose.length);
  renderBulk();
  const wrap=$('unassignedContents');wrap.replaceChildren();for(const s of loose){const item=make('div','content-row');item.append(make('span','content-name',s.item),make('span','content-qty',fmt(s.quantity)));wrap.append(item);}
+}
+function clearBlockMove(){
+ clearTimeout(blockMoveTimer);blockMoveTimer=0;
+ document.querySelectorAll('.inner-block.move-source,.inner-block.move-target').forEach(el=>el.classList.remove('move-source','move-target'));
+ document.querySelector('.block-drag-label')?.remove();blockMoveDrag=null;
+}
+function beginBlockMove(e,area,source,el){
+ if(!isOwner()||busy||e.button!==0||!blockStockAt(area,source).length)return;
+ clearBlockMove();
+ blockMoveDrag={pointer:e.pointerId,area,source,x:e.clientX,y:e.clientY,active:false,armed:e.pointerType!=='touch',el};
+ if(e.pointerType==='touch')blockMoveTimer=setTimeout(()=>{if(blockMoveDrag&&blockMoveDrag.pointer===e.pointerId){blockMoveDrag.armed=true;el.classList.add('move-source');if(navigator.vibrate)navigator.vibrate(25);}},350);
+}
+function moveBlockPointer(e){
+ const d=blockMoveDrag;if(!d||d.pointer!==e.pointerId)return;
+ const distance=Math.hypot(e.clientX-d.x,e.clientY-d.y);
+ if(!d.armed){if(distance>10)clearBlockMove();return;}
+ if(!d.active&&distance<9)return;
+ d.active=true;e.preventDefault();
+ const selected=bulkMode&&bulkSelected.has(d.source)?[...bulkSelected].filter(id=>blockStockAt(d.area,id).length):[d.source];
+ d.sources=selected;d.el.classList.add('move-source');
+ let ghost=document.querySelector('.block-drag-label');if(!ghost){ghost=make('div','block-drag-label',`${selected.length} block${selected.length===1?'':'s'} → drop on destination`);document.body.append(ghost);}
+ ghost.style.left=`${Math.min(window.innerWidth-205,e.clientX+12)}px`;ghost.style.top=`${Math.max(4,e.clientY-45)}px`;
+ const target=document.elementFromPoint(e.clientX,e.clientY)?.closest('.inner-block');
+ document.querySelectorAll('.inner-block.move-target').forEach(node=>node.classList.remove('move-target'));
+ d.destination=target&&$('innerBlocks').contains(target)&&!selected.includes(target.dataset.block)?target.dataset.block:null;
+ if(d.destination)target.classList.add('move-target');
+}
+function finishBlockPointer(e){
+ const d=blockMoveDrag;if(!d||d.pointer!==e.pointerId)return;
+ const wasActive=d.active,sources=d.sources||[d.source],destination=d.destination,area=d.area;
+ clearBlockMove();
+ if(!wasActive)return;
+ ignoreClickUntil=Date.now()+700;e.preventDefault();
+ if(!destination){toast('Drop onto a different block in this area.');return;}
+ void movePickedBlocks(area,sources,destination);
+}
+async function movePickedBlocks(area,sources,destination){
+ if(!isOwner()||busy||!validBlock(area,destination))return;
+ const from=[...new Set(sources)].filter(id=>id!==destination&&validBlock(area,id)&&blockStockAt(area,id).length);
+ if(!from.length)return;
+ const amounts=new Map();for(const id of from)for(const asset of blockStockAt(area,id)){const entry=amounts.get(norm(asset.item))||{item:asset.item,quantity:0};entry.quantity+=asset.quantity;amounts.set(norm(asset.item),entry);}
+ const summary=[...amounts.values()].map(x=>`${fmt(x.quantity)} ${x.item}`).join(', ');
+ if(!confirm(`Move ALL stock from ${from.map(id=>area+'/'+id).join(', ')} to ${area}/${destination}?\n\n${summary}\n\nMatching types in the destination will be merged. This will be logged as a block transaction.`))return;
+ try{
+  await transactBlockStock([...from.map(id=>[area,id]),[area,destination]],current=>{
+   const target=current.get(blockKey(area,destination));
+   for(const id of from){const source=current.get(blockKey(area,id));for(const [key,item] of source){const old=target.get(key);target.set(key,{areaId:area,blockId:destination,item:old?.item||item.item,quantity:(old?.quantity||0)+item.quantity});}source.clear();}
+  },(before,stamp)=>from.flatMap(id=>[...before.get(blockKey(area,id)).values()].map(item=>({timestamp:stamp,action:from.length>1?'Bulk move':'Move',item:item.item,quantity:item.quantity,from:`${area}/${id}`,to:`${area}/${destination}`,note:`Drag-and-drop transfer from ${from.length} block(s)`,reason:''}))));
+  bulkMode=false;bulkSelected.clear();renderDetails(false);
+ }catch(err){toast(err.message||'Could not move selected blocks.');}
 }
 function findBlock(){const id=String($('blockFind').value||'').trim().toUpperCase(),status=$('blockFindStatus');if(!validBlock(selectedId,id)){status.textContent='That block is not in this area.';return;}
  const node=Array.from($('innerBlocks').children).find(el=>el.dataset.block===id);if(!node)return;const scroll=$('innerGridScroll');scroll.scrollLeft=Math.max(0,node.offsetLeft-scroll.offsetLeft-scroll.clientWidth/2+node.clientWidth/2);scroll.scrollTop=Math.max(0,node.offsetTop-scroll.offsetTop-80);node.classList.add('block-found');node.focus({preventScroll:true});status.textContent=`Showing ${id}`;setTimeout(()=>node.classList.remove('block-found'),2400);}
@@ -456,6 +563,7 @@ async function transactBlockStock(locations,modify,eventsFn){
  if(!isOwner()||!state.blocksReady)throw Error('Enable block storage first.');if(busy)throw Error('A save is already in progress.');
  busy=true;connection('Saving block stock…');
  try{
+  await ensureBlockTransactions();
   const data=await readApiTab(tabs.blockStock,'A:E');verifyApiHeader(data,BLOCK_STOCK_HEADERS);
   const all=parseBlockStock(tableFromApi(data));validateBlockRows(all);
   for(const [area,block] of locations){
@@ -480,26 +588,29 @@ async function transactBlockStock(locations,modify,eventsFn){
   const checked=await readApiTab(tabs.blockStock,'A:E');verifyApiHeader(checked,BLOCK_STOCK_HEADERS);const nextRows=parseBlockStock(tableFromApi(checked));validateBlockRows(nextRows);
   for(const [a,b] of locations){const key=blockKey(a,b),want=[...current.get(key).values()].filter(s=>s.quantity>0),actual=nextRows.filter(s=>blockKey(s.areaId,s.blockId)===key);if(!sameBlockStock(want,actual))throw Error('Saved values differ from expected. Refresh and verify your stock.');}
   state.blockStock=nextRows;
-  let logged=true;try{await appendEvents(eventsFn(before,stamp));}catch(err){logged=false;console.warn(err);}
-  render();renderBlockDetails();connection('Owner connected','live');toast(logged?'Block stock saved.':'Block stock saved; movement log could not be updated.');
+  const events=eventsFn(before,stamp)||[];
+  const statuses=await Promise.allSettled([appendEvents(events),appendBlockTransactions(events)]);
+  const logged=statuses.every(v=>v.status==='fulfilled');if(!logged)for(const v of statuses)if(v.status==='rejected')console.warn('Transaction log issue',v.reason);
+  render();renderBlockDetails();connection('Owner connected','live');toast(logged?'Block stock saved and logged.':'Stock saved, but a transaction log failed. Review Block Transactions and refresh.');
  }catch(err){connection('Save failed','error');throw err;}finally{busy=false;}
 }
 async function submitBlockStock(e){
  e.preventDefault();if(!selectedBlock||busy)return;setError('blockError','');
- const area=selectedId,block=selectedBlock,action=$('blockAction').value,qty=Number($('blockQty').value),pick=$('blockItem').value,item=pick==='__other__'&&action==='add'?$('blockCustom').value.trim():pick;
+ const area=selectedId,block=selectedBlock,action=$('blockAction').value,qty=Number($('blockQty').value),pick=$('blockItem').value,item=pick==='__other__'&&action==='add'?$('blockCustom').value.trim():pick,reason=$('blockReason').value.trim();
  if(!Number.isSafeInteger(qty)||qty<1){setError('blockError','Enter a valid whole quantity.');return;}
  if(!item||item.length>90){setError('blockError','Choose an asset type.');return;}
  $('blockSave').disabled=true;
  try{
-  await transactBlockStock([[area,block]],next=>{const m=next.get(blockKey(area,block)),key=norm(item),old=m.get(key);if(action==='remove'){if(!old||old.quantity<qty)throw Error('Not enough stock in this block.');m.set(key,{...old,quantity:old.quantity-qty});}else m.set(key,{areaId:area,blockId:block,item:old?.item||item,quantity:(old?.quantity||0)+qty});},(_prev,stamp)=>[{timestamp:stamp,action:action==='add'?'Add':'Remove',item,quantity:qty,from:action==='remove'?`${area}/${block}`:'',to:action==='add'?`${area}/${block}`:'',note:'Storage block'}]);
-  $('blockQty').value=1;renderBlockDetails();
+  await transactBlockStock([[area,block]],next=>{const m=next.get(blockKey(area,block)),key=norm(item),old=m.get(key);if(action==='remove'){if(!old||old.quantity<qty)throw Error('Not enough stock in this block.');m.set(key,{...old,quantity:old.quantity-qty});}else m.set(key,{areaId:area,blockId:block,item:old?.item||item,quantity:(old?.quantity||0)+qty});},(_prev,stamp)=>[{timestamp:stamp,action:action==='add'?'Add':'Remove',item,quantity:qty,from:action==='remove'?`${area}/${block}`:'',to:action==='add'?`${area}/${block}`:'',note:`Storage block${action==='remove'&&reason?' · Reason: '+reason:''}`,reason:action==='remove'?reason:''}]);
+  $('blockQty').value=1;$('blockReason').value='';renderBlockDetails();
  }catch(err){setError('blockError',err.message);}finally{$('blockSave').disabled=false;}
 }
 async function clearBlock(){
  const area=selectedId,block=selectedBlock,items=blockStockAt(area,block);if(!isOwner()||busy||!items.length)return;
+ const reason=$('blockReason').value.trim();
  if(!confirm(`Empty ${area} / ${block}?\n\n${items.map(s=>`• ${s.item}: ${fmt(s.quantity)}`).join('\n')}\n\nAll quantities in this block will be removed and logged.`))return;
  $('blockClear').disabled=true;
- try{await transactBlockStock([[area,block]],next=>next.get(blockKey(area,block)).clear(),(before,stamp)=>[...before.get(blockKey(area,block)).values()].map(s=>({timestamp:stamp,action:'Clear block',item:s.item,quantity:s.quantity,from:`${area}/${block}`,to:'',note:'Entire block cleared'})));}
+ try{await transactBlockStock([[area,block]],next=>next.get(blockKey(area,block)).clear(),(before,stamp)=>[...before.get(blockKey(area,block)).values()].map(s=>({timestamp:stamp,action:'Clear block',item:s.item,quantity:s.quantity,from:`${area}/${block}`,to:'',note:`Entire block cleared${reason?' · Reason: '+reason:''}`,reason})));$('blockReason').value='';}
  catch(err){toast(err.message);}finally{$('blockClear').disabled=false;}
 }
 async function transferBlock(){
@@ -521,6 +632,7 @@ async function assignLooseToBlock(){
  if(!confirm(`Assign all unassigned stock in ${area} to block ${block}? Matching asset types will be combined.`))return;
  busy=true;$('assignLooseButton').disabled=true;connection('Assigning stock…');
  try{
+  await ensureBlockTransactions();
   const [looseSheet,blockSheet]=await Promise.all([readApiTab(tabs.stock,'A:D'),readApiTab(tabs.blockStock,'A:E')]);
   verifyApiHeader(looseSheet,STOCK_HEADERS);verifyApiHeader(blockSheet,BLOCK_STOCK_HEADERS);
   const source=parseStock(tableFromApi(looseSheet)).filter(s=>norm(s.areaId)===norm(area));
@@ -540,13 +652,13 @@ async function assignLooseToBlock(){
   const nextLoose=parseStock(tableFromApi(verifiedLoose)),nextBlocks=parseBlockStock(tableFromApi(verifiedBlocks));
   if(nextLoose.some(s=>norm(s.areaId)===norm(area))||!equalStock(nextBlocks.filter(s=>blockKey(s.areaId,s.blockId)===blockKey(area,block)),[...merged.values()]))throw Error('Could not verify allocation. Refresh and check the stock.');
   state.stock=nextLoose;state.blockStock=nextBlocks;
-  try{await appendEvents(source.map(item=>({timestamp:stamp,action:'Move',item:item.item,quantity:item.quantity,from:`${area} (unassigned)`,to:`${area}/${block}`,note:'Assigned existing stock to block'})));}catch(err){console.warn(err);}
+  const events=source.map(item=>({timestamp:stamp,action:'Move',item:item.item,quantity:item.quantity,from:`${area} (unassigned)`,to:`${area}/${block}`,note:'Assigned existing stock to block'}));const logResults=await Promise.allSettled([appendEvents(events),appendBlockTransactions(events)]);if(logResults.some(r=>r.status==='rejected'))toast('Stock assigned; check block transaction logs.');
   render();connection('Owner connected','live');toast(`Stock assigned to ${area}/${block}.`);
  }catch(err){toast(err.message);connection('Save failed','error');}
  finally{busy=false;$('assignLooseButton').disabled=false;}
 }
 
-async function clearEntireArea(areaId){
+async function clearEntireArea(areaId,reason=''){
  if(busy||!isOwner())throw Error('Owner editing is required.');busy=true;connection('Clearing area…');
  try{
   const [a,b]=await Promise.all([readApiTab(tabs.stock,'A:D'),...(state.blocksReady?[readApiTab(tabs.blockStock,'A:E')]:[])]);
@@ -555,6 +667,7 @@ async function clearEntireArea(areaId){
   if(!equalStock(loose,looseStockAt(areaId)))throw Error('Unassigned stock changed. Refresh first.');
   for(const blockId of new Set(blocks.map(s=>s.blockId)))if(!equalStock(blocks.filter(s=>s.blockId===blockId),blockStockAt(areaId,blockId)))throw Error('Block stock changed. Refresh first.');
   if(blocks.length!==state.blockStock.filter(s=>norm(s.areaId)===norm(areaId)).length)throw Error('Block stock changed. Refresh first.');
+  await ensureBlockTransactions();
   const writes=[];
   for(let i=1;i<a.length;i++)if(norm(a[i]?.[0])===norm(areaId)&&Number(a[i]?.[2])>0)writes.push({range:`'${tabs.stock}'!A${i+1}:D${i+1}`,values:[['','',0,now()]]});
   if(b)for(let i=1;i<b.length;i++)if(norm(b[i]?.[0])===norm(areaId)&&Number(b[i]?.[3])>0)writes.push({range:`'${tabs.blockStock}'!A${i+1}:E${i+1}`,values:[['','','',0,now()]]});
@@ -564,16 +677,19 @@ async function clearEntireArea(areaId){
   const latestLoose=parseStock(tableFromApi(checkedLoose)),latestBlocks=checkedBlocks?parseBlockStock(tableFromApi(checkedBlocks)):[];
   if(latestLoose.some(s=>norm(s.areaId)===norm(areaId))||latestBlocks.some(s=>norm(s.areaId)===norm(areaId)))throw Error('Area clear could not be verified; refresh and review inventory.');
   state.stock=latestLoose;state.blockStock=latestBlocks;
-  const stamp=now(),events=[...loose.map(s=>({...s,location:areaId})),...blocks.map(s=>({...s,location:`${areaId}/${s.blockId}`}))].map(s=>({timestamp:stamp,action:'Clear area',item:s.item,quantity:s.quantity,from:s.location,to:'',note:'Whole area emptied'}));
-  try{await appendEvents(events);}catch(err){console.warn('Could not log area clear',err);}
+  const stamp=now(),events=[...loose.map(s=>({...s,location:areaId})),...blocks.map(s=>({...s,location:`${areaId}/${s.blockId}`}))].map(s=>({timestamp:stamp,action:'Clear area',item:s.item,quantity:s.quantity,from:s.location,to:'',note:`Whole area emptied${reason?' · Reason: '+reason:''}`,reason}));
+  const results=await Promise.allSettled([appendEvents(events),appendBlockTransactions(events.filter(e=>e.from.includes('/')))]);if(results.some(r=>r.status==='rejected'))toast('Stock cleared; verify the transaction history.');
   render();connection('Owner connected','live');toast('Entire area emptied, including all storage blocks.');
  }catch(err){connection('Clear failed','error');throw err;}finally{busy=false;}
 }
 
 function signIn(){if(!cfg.OAUTH_CLIENT_ID||!cfg.OWNER_EMAIL){toast('Owner login is not configured.');return;}if(!gisReady||!window.google?.accounts?.oauth2){toast('Google sign-in is loading. Try again.');return;}
  if(!tokenClient)tokenClient=google.accounts.oauth2.initTokenClient({client_id:cfg.OAUTH_CLIENT_ID,scope:'openid email https://www.googleapis.com/auth/spreadsheets',callback:async r=>{if(!r.access_token){toast('Sign-in was cancelled.');return;}const candidate=r.access_token;try{const response=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+candidate}});if(!response.ok)throw new Error('Could not verify Google account.');const who=await response.json();if(!who.email_verified||norm(who.email)!==norm(cfg.OWNER_EMAIL))throw new Error('This account does not have owner access.');token=candidate;ownerEmail=who.email;mode='owner';render();toast('Owner editing unlocked.');}catch(err){token='';ownerEmail='';mode='viewer';render();toast(err.message);}}});tokenClient.requestAccessToken({prompt:'select_account'});}
-function signOut(){bulkMode=false;bulkSelected.clear();clearStockDrag();token='';ownerEmail='';mode='viewer';designing=false;closeEditor();render();connection('Live · view only','live');toast('Editing locked.');}
+function signOut(){bulkMode=false;bulkSelected.clear();clearStockDrag();clearBlockMove();token='';ownerEmail='';mode='viewer';designing=false;closeEditor();render();connection('Live · view only','live');toast('Editing locked.');}
 function initialise(){
+ $('warehouseTab').onclick=()=>showMainView('warehouse');$('transactionsTab').onclick=()=>showMainView('transactions');
+ $('transactionType').onchange=()=>{transactionLimit=50;renderBlockTransactions();};$('transactionSearch').oninput=()=>{transactionLimit=50;renderBlockTransactions();};$('transactionsMore').onclick=()=>{transactionLimit+=50;renderBlockTransactions();};
+ document.addEventListener('pointermove',moveBlockPointer,{passive:false});document.addEventListener('pointerup',finishBlockPointer);document.addEventListener('pointercancel',clearBlockMove);
  $('findForm').onsubmit=findAssets; $('findItem').addEventListener('change',()=>{findRequest=null;$('findResult').classList.add('hidden');});$('findQty').addEventListener('input',()=>{findRequest=null;$('findResult').classList.add('hidden');});
  $('bulkStart').onclick=startBulk;$('bulkCancel').onclick=cancelBulk;$('bulkSelectAll').onclick=selectAllBulk;$('bulkRemove').onclick=removeBulk;
  $('areaFindAction').onclick=()=>{openWarehouseOverview();requestAnimationFrame(()=>$('findPanel').scrollIntoView({behavior:'smooth',block:'start'}));};

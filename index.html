@@ -6,11 +6,11 @@
   <meta name="theme-color" content="#f4f7f5">
   <meta name="description" content="Live warehouse storage map and area inventory">
   <title>Warehouse | Assets Area</title>
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=5">
   <script>if(new URLSearchParams(location.search).has('area'))document.documentElement.classList.add('area-route');</script>
   <script defer src="config.js"></script>
-  <script defer src="retrieval.js?v=3"></script>
-  <script defer src="app.js?v=3"></script>
+  <script defer src="retrieval.js?v=5"></script>
+  <script defer src="app.js?v=5"></script>
   <script async defer src="https://accounts.google.com/gsi/client" onload="window.warehouseGisReady?.()"></script>
 </head>
 <body>
@@ -20,11 +20,15 @@
     <div class="brand"><div class="logo" aria-hidden="true">▦</div><div><h1>Assets Area</h1><p>Warehouse storage management</p></div></div>
     <div class="header-actions"><div class="connection" id="connection"><i></i><span id="connectionText">Connecting…</span></div><button class="btn icon-only" id="refresh" title="Refresh data" aria-label="Refresh data">↻</button><button class="btn btn-dark" id="ownerButton">Owner edit</button></div>
   </header>
+  <nav class="primary-tabs" aria-label="Main pages">
+    <button type="button" id="warehouseTab" class="primary-tab active" aria-current="page">▦ Warehouse</button>
+    <button type="button" id="transactionsTab" class="primary-tab">↔ Block transactions</button>
+  </nav>
   <div id="notice" class="notice hidden" role="alert"></div>
   <section class="intro"><div><div class="eyebrow">WAREHOUSE OVERVIEW</div><h2>Storage, at a glance.</h2><p>Choose an area to see exactly what's stored inside.</p></div><div class="mode-pill" id="modePill">VIEW ONLY</div></section>
   <section class="summary-section" aria-labelledby="summaryTitle"><div class="section-top"><div><h3 id="summaryTitle">Inventory by asset type</h3><p>Quantities stay separate for each asset type.</p></div><button class="link-button hidden" id="clearFilter">Clear filter</button></div><div id="summary" class="summary-grid"></div></section>
   <section class="find-panel" id="findPanel" aria-labelledby="findTitle">
-    <div class="section-top"><div><div class="eyebrow">PUBLIC · NO LOGIN REQUIRED</div><h3 id="findTitle">Find assets to collect</h3><p>Find an ordered route across multiple areas, with highlighted blocks on the warehouse map. Picking starts at row N in every column.</p></div></div>
+    <div class="section-top"><div><div class="eyebrow">PUBLIC · NO LOGIN REQUIRED</div><h3 id="findTitle">Find assets to collect</h3><p>Enter the quantity you need. Find provides a numbered removal route, including clearing other blocks where necessary to reach deeper stock.</p></div></div>
     <form id="findForm" class="find-form">
       <label class="field"><span>Asset type</span><select id="findItem" required><option value="">Choose an asset</option></select></label>
       <label class="field"><span>Quantity needed</span><input id="findQty" type="number" min="1" max="99999999" step="1" value="1" required></label>
@@ -41,6 +45,13 @@
     <div class="section-top areas-heading"><div><h3>Areas &amp; holding blocks</h3><p>Browse every area or open a specific location.</p></div><label class="search-box"><span aria-hidden="true">⌕</span><input id="search" placeholder="Find area or asset…" autocomplete="off" aria-label="Search areas"></label></div>
     <div id="areaList" class="area-list"></div>
   </section>
+  <section class="transactions-page hidden" id="transactionsPage" aria-labelledby="transactionsTitle">
+    <div class="section-top"><div><div class="eyebrow">STORAGE MOVEMENT AUDIT</div><h2 id="transactionsTitle">Block transactions</h2><p>Every block addition, removal, clearance and transfer. Removal reasons are recorded here.</p></div><span class="transaction-count" id="transactionCount">0 transactions</span></div>
+    <div class="transactions-filters"><label class="field"><span>Movement</span><select id="transactionType"><option value="all">All movements</option><option value="remove">Removals / emptied blocks</option><option value="move">Transfers</option><option value="add">Additions</option></select></label><label class="field"><span>Search</span><input id="transactionSearch" placeholder="Block, asset, reason, area…" autocomplete="off"></label></div>
+    <div id="transactionsList" class="transactions-list"></div>
+    <button type="button" id="transactionsMore" class="btn transactions-more hidden">Show more</button>
+    <p class="field-hint">This page reads the <strong>Block Transactions</strong> sheet. Only signed-in owners can change inventory; viewers can inspect the history.</p>
+  </section>
   <details class="activity" id="activity"><summary><span>Recent movements</span><span id="activityCount">0 events</span></summary><div id="activityList"></div></details>
   <footer class="footer">Live inventory · Public view is read only</footer>
 </div>
@@ -50,7 +61,7 @@
   <div class="area-meta" id="areaMeta"></div>
   <div class="drawer-section-header blocks-heading"><div><h3>Storage blocks</h3><p id="blockAccessCaption">Tap a block to see its contents.</p></div><span id="blockMapCount"></span></div>
   <div class="bulk-toolbar hidden" id="bulkToolbar">
-    <div><strong>Bulk removal</strong><p id="bulkHint">Select stocked blocks to remove their contents together.</p></div>
+    <div><strong>Bulk removal</strong><p id="bulkHint">Select stocked blocks, or drag selected blocks onto a destination to move them together.</p></div>
     <div class="bulk-toolbar-buttons"><button type="button" class="btn" id="bulkStart">Select multiple blocks</button><button type="button" class="btn hidden" id="bulkSelectAll">Select all stocked</button><button type="button" class="btn hidden" id="bulkCancel">Cancel</button></div>
   </div>
   <div class="block-tools"><label class="block-jump"><span>Find block</span><input id="blockFind" type="text" maxlength="5" placeholder="e.g. C04" aria-label="Block ID"></label><button type="button" id="blockFindGo" class="btn">Go to block</button><span id="blockFindStatus" role="status"></span></div>
@@ -59,6 +70,8 @@
   <div id="bulkSummary" class="bulk-summary hidden" aria-live="polite">
     <div class="bulk-summary-title"><strong id="bulkSelectedCount">0 blocks selected</strong><span>Removal totals by asset type</span></div>
     <div id="bulkTotals" class="bulk-total-list"></div>
+    <label class="field"><span>Reason for removal (optional)</span><input id="bulkReason" maxlength="240" placeholder="e.g. Sent to client, damaged, collected"></label>
+    <div class="bulk-move-help">To move several selected blocks instead, drag any selected block onto another block. Existing destination contents are combined.</div>
     <div id="bulkError" class="form-error hidden" role="alert"></div>
     <button type="button" id="bulkRemove" class="btn btn-danger full">Remove selected stock</button>
   </div>
@@ -66,6 +79,7 @@
   <div class="drawer-section-header"><h3>Total assets in this area</h3><span id="areaItemCount"></span></div>
   <div id="contents" class="contents"></div>
   <section id="unassignedPanel" class="legacy-panel hidden"><div class="drawer-section-header"><h3>Stock not assigned to a block</h3></div><p class="field-hint">Existing area inventory stays here until you allocate it to a specific block. It is included in the area totals above.</p><div id="unassignedContents"></div><div id="assignLoosePanel" class="hidden"><label class="field"><span>Allocate all unassigned stock to a block</span><select id="assignLooseTo"></select></label><button type="button" class="btn full" id="assignLooseButton">Move unassigned stock into block</button></div></section>
+  <label class="field hidden" id="areaClearReasonField"><span>Reason for clearing area (optional)</span><input id="areaClearReason" maxlength="240" placeholder="e.g. Shift handover / client collection"></label>
   <button class="btn btn-danger full clear-area hidden" type="button" id="clearWholeArea">Empty all blocks in this area</button>
   <div class="area-link"><button class="btn" id="copyLink">⧉ Copy area link</button><span id="linkStatus" role="status"></span></div>
   <div id="ownerStockPanel" class="owner-panel hidden"><div class="divider"></div><h3>Update unassigned stock</h3><div class="tabs"><button type="button" class="selected" data-action="add">+ Add</button><button type="button" data-action="remove">− Remove</button></div>
@@ -85,6 +99,7 @@
  <div class="area-link"><button type="button" class="btn" id="copyBlockLink">⧉ Copy block link</button></div>
  <p class="content-empty hidden" id="blockSetupMessage">Sign in and select <strong>Enable area blocks</strong> to begin recording inventory in individual blocks.</p>
  <div class="owner-panel hidden" id="blockOwnerPanel"><div class="divider"></div><h3>Update this block</h3>
+  <label class="field"><span>Reason / reference (optional)</span><input id="blockReason" maxlength="240" placeholder="e.g. Sent to NG15 / stock adjustment"></label>
   <form id="blockForm"><label class="field"><span>Movement</span><select id="blockAction"><option value="add">+ Add items</option><option value="remove">− Remove items</option></select></label>
    <label class="field"><span>Asset type</span><select id="blockItem" required></select></label><label class="field hidden" id="blockCustomWrap"><span>Custom item type</span><input id="blockCustom" maxlength="90" placeholder="Enter item type"></label>
    <label class="field"><span>Quantity</span><input id="blockQty" type="number" min="1" max="99999999" step="1" value="1" required></label><div id="blockError" class="form-error hidden" role="alert"></div><button type="submit" class="btn btn-green full" id="blockSave">Save block stock</button>

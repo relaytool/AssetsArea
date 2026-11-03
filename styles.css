@@ -66,6 +66,7 @@
 .pick-number{display:grid;place-items:center;width:31px;height:31px;flex:none;background:#196b46;color:#fff;border-radius:9px;font-size:13px;font-weight:800}
 .pick-location{flex:1;min-width:0}.pick-location strong{display:block;font-size:12px;line-height:1.5}.pick-location span{display:block;font-size:11px;color:#758579;margin-top:3px;line-height:1.35}
 .pick-quantity{font-weight:900;font-size:13px;white-space:nowrap;color:#155f40}
+.find-surplus{border:1px solid #cbdde0;background:#edf6f7;border-radius:10px;padding:10px 12px;color:#215365;font-size:12px;font-weight:700;line-height:1.55;margin:9px 0 14px}
 .find-message,.find-warning,.find-footnote{margin:10px 0 0;font-size:12px;line-height:1.55}.find-warning{color:#a05a28;font-weight:750}.find-footnote{color:#66796d}
 /* Owner-only multi-block removal */
 .bulk-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:13px;margin:5px 0 11px;background:#f6faf7;border:1px solid #deeadf;border-radius:12px}
@@ -132,3 +133,33 @@
  .find-visual-hint{font-size:10px}.find-area-map-head{gap:8px;padding:11px}.find-area-order{width:28px;height:28px}.find-area-heading strong{font-size:12px}.find-area-heading span{font-size:10px}.find-block-count{font-size:9px}
  .find-mini-scroll{padding:9px}.find-mini-grid{gap:4px}.find-mini-cell{min-width:67px;height:59px}.find-area-stops{padding:10px}
 }
+
+/* Main section navigation and block transaction history */
+.primary-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 3px}
+.primary-tab{border:1px solid var(--line);background:#fff;color:#476352;border-radius:11px;padding:12px 17px;font-weight:800;cursor:pointer}
+.primary-tab.active{background:#176945;color:white;border-color:#176945}
+.transactions-page{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px;margin:24px 0;box-shadow:var(--shadow)}
+.transactions-page h2{font-size:24px;letter-spacing:-.7px;margin:5px 0}
+.transactions-filters{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}
+.transactions-filters>.field{flex:1 1 200px;max-width:380px}
+.transaction-count{color:var(--muted);font-size:12px;font-weight:800}
+.transaction-row{padding:14px;border:1px solid var(--line);border-radius:12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;margin-bottom:9px}
+.transaction-row .tx-main{font-weight:800;color:#203f2b;font-size:13px;overflow-wrap:anywhere}
+.transaction-row .tx-meta{font-size:12px;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
+.transaction-row .tx-reason{margin-top:7px;color:#795a1e;font-size:12px;font-weight:650}
+.transaction-row .tx-qty{font-weight:900;text-align:right;white-space:nowrap}
+.transaction-row .tx-action{font-size:10px;text-transform:uppercase;letter-spacing:.5px;border-radius:7px;padding:4px 7px;background:#f1f6f2;color:#3d6d4d;display:inline-block;margin-right:6px}
+.transaction-row .tx-action.remove{background:#fff1ea;color:#9b4a29}
+.transaction-row .tx-action.move{background:#edf2ff;color:#405f9c}
+.transactions-more{display:block;margin:14px auto}
+.bulk-move-help{font-size:12px;color:#4d7261;padding:7px 0}
+.inner-block{touch-action:pan-x pan-y}
+.inner-block.move-source{outline:3px solid #237950;outline-offset:-3px;opacity:.65}
+.inner-block.move-target{outline:3px solid #2986ca;outline-offset:-3px;background:#def1ff!important;opacity:1}
+.block-drag-label{position:fixed;z-index:99999;pointer-events:none;border-radius:9px;background:#174e35;color:white;font-weight:800;padding:10px 13px;box-shadow:0 10px 22px #183b2b44;max-width:200px;font-size:12px}
+.find-mini-cell.is-clear{background:#fff1db;border-color:#dba558;color:#784a19}
+.find-mini-cell.is-clear .find-cell-pin{background:#a86919;color:white}
+.pick-step.is-clear{border-color:#e3c28c;background:#fffaf1}
+.pick-step.is-clear .pick-number{background:#a7681b}
+.find-legend{font-size:12px;color:#5b6d60;line-height:1.6;margin:8px 0}
+@media(max-width:600px){.primary-tabs{display:grid;grid-template-columns:1fr 1fr}.primary-tab{font-size:12px;padding:10px}.transactions-page{padding:14px}.transaction-row{grid-template-columns:minmax(0,1fr) auto}}
