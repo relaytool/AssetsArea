@@ -54,7 +54,8 @@
  function plan({areas=[],blockSettings=[],blockStock=[],looseStock=[],item='',quantity=0}){
   const requested=Number(quantity),asset=norm(item);
   if(!asset||!whole(requested))throw new Error('Choose an asset and enter a positive whole quantity.');
-  const visibleAreas=areas.filter(a=>a.active!==false&&norm(a.type)!=='aisle').sort(placeCompare);
+  const mapOnlyTypes=new Set(['aisle','bay','exit','occupied','label','door','wall','safety','marking']);
+  const visibleAreas=areas.filter(a=>a.active!==false&&!mapOnlyTypes.has(norm(a.type))).sort(placeCompare);
   const areaById=new Map(visibleAreas.map(a=>[norm(a.id),a])),settings=new Map(blockSettings.map(s=>[norm(s.areaId),s]));
   const stockAt=new Map();let totalLocated=0,unassigned=0;
   for(const s of looseStock)if(asset===norm(s.item)&&areaById.has(norm(s.areaId)))unassigned+=Number(s.quantity)||0;

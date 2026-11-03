@@ -163,3 +163,88 @@
 .pick-step.is-clear .pick-number{background:#a7681b}
 .find-legend{font-size:12px;color:#5b6d60;line-height:1.6;margin:8px 0}
 @media(max-width:600px){.primary-tabs{display:grid;grid-template-columns:1fr 1fr}.primary-tab{font-size:12px;padding:10px}.transactions-page{padding:14px}.transaction-row{grid-template-columns:minmax(0,1fr) auto}}
+
+/* Floor-plan studio: mobile-first map controls and non-inventory markings */
+.map-view-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
+.zoom-actions{display:inline-flex;align-items:center;gap:4px;background:#f1f6f2;border:1px solid #dce8df;padding:3px;border-radius:11px;white-space:nowrap}
+.zoom-actions .btn{border:0;min-height:33px;padding:5px 10px;border-radius:8px;background:transparent;font-size:14px}
+.zoom-actions .btn:hover{background:#fff}
+.zoom-actions .zoom-btn{min-width:36px;font-weight:900;font-size:18px}
+.zoom-actions .zoom-fit{font-size:11px}
+.focus-map-toolbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 22px 10px;background:#fff;font-size:11px;color:#688070}
+.design-palette{display:flex;align-items:center;gap:7px;overflow-x:auto;scrollbar-width:thin;padding:11px 2px 12px;margin:0 0 7px;overscroll-behavior-x:contain}
+.design-palette .palette-label{font-size:10px;font-weight:900;letter-spacing:.7px;color:#678775;flex:none;margin-right:3px}
+.palette-tool{display:inline-flex;align-items:center;justify-content:center;gap:5px;white-space:nowrap;border:1px solid #dce5dd;border-radius:10px;background:#fff;color:#42614d;padding:10px 12px;min-height:40px;font-size:12px;font-weight:750;flex:none}
+.palette-tool:hover{background:#edf6ef}
+.palette-tool.active{border-color:#217b52;background:#1b7149;color:#fff;box-shadow:0 0 0 2px #1e704722}
+.warehouse-board.drawing-tool{touch-action:none;cursor:crosshair}
+.warehouse-board.drawing-tool .map-block{cursor:not-allowed;touch-action:pan-x pan-y;outline:none}
+.draw-preview{z-index:12;border:2px dashed #187b4b;border-radius:8px;background:#43ae7440;color:#16643e;display:grid;place-items:center;font-weight:900;letter-spacing:.2px;pointer-events:none;min-width:0;min-height:0;overflow:hidden}
+.draw-preview.invalid{background:#f59d9d66;border-color:#b84d4d;color:#9a3636}
+.map-block .marker-symbol{font-weight:900;line-height:1;font-size:18px;flex:none;opacity:.94}
+.map-block.floor-type-bay{border:2px solid #4386bd!important;border-radius:7px;background:repeating-linear-gradient(135deg,#dceeff,#dceeff 9px,#edf6ff 9px,#edf6ff 18px)!important;color:#245a84!important}
+.map-block.floor-type-exit{background:#daf5e6!important;border:2px solid #299662!important;color:#176444!important}
+.map-block.floor-type-occupied{background:repeating-linear-gradient(135deg,#ffebdb,#ffebdb 10px,#f7ddc5 10px,#f7ddc5 20px)!important;border:2px solid #cf834f!important;color:#91512c!important}
+.map-block.floor-type-label{border:none!important;box-shadow:none!important;background:transparent!important;color:#304c42!important;text-align:center;align-items:center}
+.map-block.floor-type-label .block-name{white-space:normal;font-size:clamp(12px,1.8vw,21px);font-weight:900;overflow:visible;text-align:center}
+.map-block.floor-type-label .marker-symbol,.map-block.floor-type-label .block-id,.map-block.floor-type-label .block-status{display:none}
+.warehouse-board.designing .map-block.floor-type-label{outline:1px dashed #93b9a3!important}
+.map-block.floor-type-aisle{background:#edf0f0!important;border:1px dashed #aebfba!important;color:#667f76!important}
+.map-block.floor-type-door{background:#d7e9f9!important;border:2px dashed #4985ad!important;color:#2a5f85!important}
+.map-block.floor-type-wall{background:repeating-linear-gradient(45deg,#72838a,#72838a 5px,#a4aeb2 5px,#a4aeb2 10px)!important;border:2px solid #65767c!important;color:#fff!important}
+.map-block.floor-type-wall .block-status,.map-block.floor-type-wall .block-id{display:none}
+.map-block.floor-type-safety{background:#fff2c5!important;border:2px dashed #d6a53b!important;color:#79541a!important}
+.map-block.floor-type-marking{background:#f0e6f7!important;border:1px dashed #ad8ac9!important;color:#69478c!important}
+.map-block.floor-type-label .resize-handle{background:#174d35}
+.map-board-compact .map-block{padding:3px 2px;align-items:center;text-align:center;gap:2px;border-radius:5px;min-width:0}
+.map-board-compact .map-block .block-id{font-size:8px;line-height:1.15;overflow-wrap:anywhere}
+.map-board-compact .map-block .block-name{font-size:9px;line-height:1.12;white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+.map-board-compact .map-block .block-status{display:none}
+.map-board-compact .map-block .marker-symbol{font-size:12px}
+.map-board-compact .map-block.floor-type-label .block-name{font-size:12px;-webkit-line-clamp:3}
+.map-board-compact .you-are-here{font-size:7px;padding:2px}
+.area-nav .area-back-top{flex:none;border-color:#cbe0d1;background:#eef7f1;color:#165d3c;min-height:41px;font-size:12px}
+.area-nav .area-back-top:hover{background:#e0f1e6}
+/* Fit entire map to screen by default. Zooming expands the map horizontally and preserves scrolling. */
+#boardScroll{max-height:min(73vh,780px);-webkit-overflow-scrolling:touch;scrollbar-color:#afc5b7 #e5ede8}
+#mapCanvasScroll{touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch}
+@media(max-width:780px){
+  .map-toolbar{align-items:flex-start;gap:7px;flex-wrap:wrap}
+  .map-legend{gap:8px;font-size:10px}
+  .map-view-actions{width:100%;justify-content:space-between}
+  .area-nav{flex-wrap:wrap}
+  .area-nav .area-back-top{order:-1}
+  .warehouse-board{grid-template-rows:repeat(var(--rows),34px);gap:3px;padding:7px;min-height:220px}
+  .map-canvas-scroll .warehouse-board{grid-template-rows:repeat(var(--rows),34px)}
+  #boardScroll{max-height:480px}
+}
+@media(max-width:650px){
+ .workspace{padding:13px}
+ .workspace-top{gap:8px;flex-wrap:wrap}
+ .workspace-top .toolbar{width:100%;gap:6px}
+ .workspace-top .toolbar .btn{flex:1;padding:9px 7px}
+ .designer-hint{font-size:11px;padding:9px;line-height:1.5}
+ .design-palette{margin:0 -4px 6px;padding:8px 4px 10px}
+ .design-palette .palette-label{display:none}
+ .palette-tool{min-height:39px;padding:8px 10px;font-size:11px}
+ .area-nav{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px;padding:9px 0 12px}
+ .area-nav .area-back-top{grid-column:1/-1;width:100%;text-align:left;min-height:42px;font-size:12px}
+ .area-nav .area-nav-brand{grid-column:1;min-width:0}
+ .area-nav .area-nav-actions{grid-column:2;max-width:240px}
+ .area-nav-actions .btn{font-size:10px!important}
+ .area-nav-brand small{display:none!important}
+ .focus-map-toolbar{padding:6px 12px 8px;font-size:10px}
+ .focus-map-toolbar .zoom-actions .btn{min-height:30px}
+ .warehouse-map-header{padding:calc(10px + env(safe-area-inset-top)) 12px 9px}
+ .warehouse-map-header h2{font-size:18px}
+ .warehouse-map-header p{font-size:10px}
+ .map-canvas-scroll .warehouse-board{min-width:0}
+ .map-canvas-scroll{width:100%;}
+ .map-block .marker-symbol{font-size:13px}
+}
+
+/* Tiny symbols remain legible in the fitted mobile overview. */
+.map-board-compact .map-block.marker-narrow .block-name,.find-overview-board .map-block.marker-narrow .block-name{display:none}
+.map-board-compact .map-block.marker-narrow .block-id{font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:clip;max-width:100%}
+.map-board-compact .map-block.marker-narrow .marker-symbol{font-size:15px}
+@media(max-width:650px){.find-overview-board .map-block.marker-narrow .block-id{font-size:7px}.find-overview-board .map-block.marker-narrow .marker-symbol{font-size:11px}.area-route .inner-grid{gap:7px}.area-route .inner-block{min-height:76px;padding:10px}.area-route .inner-id{font-size:13px}.area-route .inner-note{font-size:10px}}
