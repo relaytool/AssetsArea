@@ -6,11 +6,11 @@
   <meta name="theme-color" content="#f4f7f5">
   <meta name="description" content="Live warehouse storage map and area inventory">
   <title>Warehouse | Assets Area</title>
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
   <script>if(new URLSearchParams(location.search).has('area'))document.documentElement.classList.add('area-route');</script>
   <script defer src="config.js"></script>
   <script defer src="retrieval.js?v=5"></script>
-  <script defer src="app.js?v=6"></script>
+  <script defer src="app.js?v=7"></script>
   <script async defer src="https://accounts.google.com/gsi/client" onload="window.warehouseGisReady?.()"></script>
 </head>
 <body>
@@ -79,7 +79,26 @@
   </div>
   <div class="block-tools"><label class="block-jump"><span>Find block</span><input id="blockFind" type="text" maxlength="5" placeholder="e.g. C04" aria-label="Block ID"></label><button type="button" id="blockFindGo" class="btn">Go to block</button><span id="blockFindStatus" role="status"></span></div>
   <div id="blocksDisabled" class="content-empty hidden">This is a walkway, not a storage area.</div>
-  <div id="blockGridWrap"><div class="inner-grid-scroll" id="innerGridScroll"><div class="inner-grid" id="innerBlocks"></div></div></div>
+  <div class="block-workspace" id="blockWorkspace">
+    <div class="block-workspace-bar">
+      <div class="block-view-choices" role="group" aria-label="Block arrangement">
+        <button type="button" class="block-view-choice is-active" id="blockViewLanes" aria-pressed="true">▦ Grouped lanes</button>
+        <button type="button" class="block-view-choice" id="blockViewCompact" aria-pressed="false">▤ Compact grid</button>
+      </div>
+      <span class="block-view-desc" id="blockViewDesc">Columns grouped to fit the screen — no sideways scrolling.</span>
+    </div>
+    <div class="block-sheet-toolbar hidden" id="blockSheetToolbar">
+      <div class="block-sheet-selection"><span class="sheet-selection-dot"></span><strong id="blockSelectionLabel">Select a block</strong><span id="blockClipboardLabel">Select, then copy or edit</span></div>
+      <div class="block-sheet-actions">
+        <button type="button" class="btn" id="blockCopySelection" disabled title="Copy selected blocks · Ctrl/Cmd+C">⧉ Copy</button>
+        <button type="button" class="btn" id="blockPasteSelection" disabled title="Paste into selected block · Ctrl/Cmd+V">▣ Paste</button>
+        <button type="button" class="btn btn-green" id="blockEditSelection" disabled title="Edit selected block · Enter or double-click">✎ Edit</button>
+        <button type="button" class="btn block-deselect" id="blockDeselect" title="Clear selection">✕</button>
+      </div>
+      <p class="block-sheet-tip">Click to select · Shift+click for a range · Ctrl/Cmd+click to select several · Arrows to move · Enter or double-click to edit · Ctrl/Cmd+C/V to copy or paste. On mobile, use the buttons above.</p>
+    </div>
+    <div id="blockGridWrap"><div class="inner-grid-scroll" id="innerGridScroll"><div class="inner-grid" id="innerBlocks" role="group" aria-label="Blocks in this storage area"></div></div></div>
+  </div>
   <div id="bulkSummary" class="bulk-summary hidden" aria-live="polite">
     <div class="bulk-summary-title"><strong id="bulkSelectedCount">0 blocks selected</strong><span>Removal totals by asset type</span></div>
     <div id="bulkTotals" class="bulk-total-list"></div>
@@ -112,6 +131,8 @@
  <p class="content-empty hidden" id="blockSetupMessage">Sign in and select <strong>Enable area blocks</strong> to begin recording inventory in individual blocks.</p>
  <div class="owner-panel hidden" id="blockOwnerPanel"><div class="divider"></div><h3>Update this block</h3>
   <label class="field"><span>Reason / reference (optional)</span><input id="blockReason" maxlength="240" placeholder="e.g. Sent to NG15 / stock adjustment"></label>
+  <form id="blockQuantitiesForm" class="block-quantity-editor hidden"><div class="block-quantity-head"><strong>Edit quantities directly</strong><span>Enter 0 to empty an asset</span></div><div id="blockQuantityRows" class="block-quantity-rows"></div><div id="blockQtyEditError" class="form-error hidden" role="alert"></div><button type="submit" class="btn btn-green full" id="saveBlockQuantities">Save quantity changes</button></form>
+  <div class="block-add-head">Add or remove an asset</div>
   <form id="blockForm"><label class="field"><span>Movement</span><select id="blockAction"><option value="add">+ Add items</option><option value="remove">− Remove items</option></select></label>
    <label class="field"><span>Asset type</span><select id="blockItem" required></select></label><label class="field hidden" id="blockCustomWrap"><span>Custom item type</span><input id="blockCustom" maxlength="90" placeholder="Enter item type"></label>
    <label class="field"><span>Quantity</span><input id="blockQty" type="number" min="1" max="99999999" step="1" value="1" required></label><div id="blockError" class="form-error hidden" role="alert"></div><button type="submit" class="btn btn-green full" id="blockSave">Save block stock</button>

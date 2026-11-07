@@ -19,6 +19,7 @@ const normalizedHeader=s=>norm(s).replace(/[^a-z0-9]/g,'');
 const dateText=s=>{const d=new Date(s);return Number.isFinite(+d)?d.toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}):String(s||'')};
 let state={areas:[],stock:[],events:[],blockTransactions:[],historyReady:false,legacy:false,loaded:false,legacyAreas:[],legacyStock:[],blockSettings:[],blockStock:[],blocksReady:false};
 let bulkMode=false,bulkSelected=new Set(),findRequest=null,mainView='warehouse',transactionLimit=50,blockMoveDrag=null,blockMoveTimer=0;
+let blockView='lanes',blockSelection=new Set(),focusedBlock='',blockAnchor='',blockClipboard=null,lastBlockGroupSize=0;
 let drawingTool='select',drawGesture=null,mapZoom=1,focusZoom=1;
 let mode='viewer',token='',ownerEmail='',tokenClient=null,gisReady=false,designing=false,selectedId='',selectedBlock='',editingId='',stockAction='add',filterItem='',busy=false,toastTimer=0,loading=false,queuedLoad=false,drag=null,stockPress=null,stockPressTimer=0,stockDrop=null,ignoreClickUntil=0;
 const activeAreas=()=>state.areas.filter(a=>a.active);
@@ -288,12 +289,12 @@ function areaURL(id){const u=new URL(window.location.href);u.searchParams.set('a
 function changeURL(id,replace=false){const u=new URL(location.href);if(id){u.searchParams.set('area',id);u.searchParams.delete('block');}else{u.searchParams.delete('area');u.searchParams.delete('block');}history[replace?'replaceState':'pushState']({},'',u.pathname+u.search+u.hash);}
 function focusRoute(on){document.documentElement.classList.toggle('area-route',on);document.body.classList.toggle('area-focus',on);$('areaLoading').classList.toggle('hidden',!on);}
 function openFromURL(){const q=new URLSearchParams(location.search),id=q.get('area');if(!id){if(selectedId)closeDetails(false);else focusRoute(false);return;}if(!state.loaded)return;const a=getArea(id);if(a){if(selectedId!==a.id)openDetails(a.id,false);else focusRoute(true);const block=q.get('block');if(block&&validBlock(a.id,block)){if(selectedBlock!==block)openBlock(block,false);}else if(selectedBlock)closeBlock(false);}else{toast(`Area ${id} was not found.`);changeURL('',true);closeDetails(false);focusRoute(false);notice(`Area ${id} was not found. Check the link or select an area from the warehouse overview.`,'error');}}
-function openDetails(id,update=true){const a=getArea(id);if(!a)return;showMainView('warehouse');if(norm(selectedId)!==norm(a.id)){bulkMode=false;bulkSelected.clear();}selectedId=a.id;selectedBlock='';stockAction='add';$('stockForm').reset();$('stockQty').value='1';setError('stockError','');$('linkStatus').textContent='';renderDetails(true);focusRoute(true);$('areaLoading').classList.add('hidden');openOverlay('detailsOverlay');if(update)changeURL(a.id);}
+function openDetails(id,update=true){const a=getArea(id);if(!a)return;showMainView('warehouse');if(norm(selectedId)!==norm(a.id)){bulkMode=false;bulkSelected.clear();blockSelection.clear();focusedBlock='';blockAnchor='';}selectedId=a.id;selectedBlock='';stockAction='add';$('stockForm').reset();$('stockQty').value='1';setError('stockError','');$('linkStatus').textContent='';renderDetails(true);focusRoute(true);$('areaLoading').classList.add('hidden');openOverlay('detailsOverlay');if(update)changeURL(a.id);}
 function renderDetails(resetStock=false){const a=getArea(selectedId);if(!a){closeDetails(true);return;}$('areaType').textContent=a.type.toUpperCase();$('areaTitle').textContent=a.name;$('areaSubtitle').textContent=a.id; $('areaViewMode').textContent=isOwner()?'MANAGER EDIT':'VIEW ONLY';$('areaOwnerButton').textContent=isOwner()?'Lock editing':'Manager edit';
  const tags=$('areaMeta');tags.replaceChildren();for(const t of [a.id,a.zone,a.type].filter(Boolean))tags.append(make('span','',t));const items=stockAt(a.id).sort((a,b)=>a.item.localeCompare(b.item));renderBlockGrid(a.id);$('areaItemCount').textContent=`${items.length} ${items.length===1?'type':'types'}`;const wrap=$('contents');wrap.replaceChildren();for(const s of items){const row=make('div','content-row');row.append(make('span','content-name',s.item),make('span','content-qty',fmt(s.quantity)));wrap.append(row);}if(!items.length)wrap.append(make('div','content-empty','Nothing stored in this area.'));
  const enabled=isOwner()&&!state.legacy&&canHold(a)&&looseStockAt(a.id).length>0;$('ownerStockPanel').classList.toggle('hidden',!enabled);$('clearArea').disabled=!items.length;$('transferPanel').classList.toggle('hidden',!looseStockAt(a.id).length);if(items.length){const dest=$('transferTo'),previous=dest.value;dest.replaceChildren();dest.append(new Option('Choose destination area',''));for(const other of activeAreas().filter(other=>norm(other.id)!==norm(a.id)&&canHold(other)).sort((x,y)=>x.id.localeCompare(y.id,undefined,{numeric:true})))dest.append(new Option(`${other.id} · ${other.name}`,other.id));if([...dest.options].some(o=>o.value===previous))dest.value=previous;}
  if(resetStock){$('stockForm').reset();$('stockQty').value='1';setStockAction('add');}else if(stockAction==='remove')setRemoveOptions();}
-function closeDetails(update=true){bulkMode=false;bulkSelected.clear();if(update&&new URLSearchParams(location.search).has('area'))changeURL('');closeOverlay('mapOverlay');closeOverlay('blockOverlay');closeOverlay('detailsOverlay');selectedId='';selectedBlock='';focusRoute(false);}
+function closeDetails(update=true){bulkMode=false;bulkSelected.clear();blockSelection.clear();focusedBlock='';blockAnchor='';if(update&&new URLSearchParams(location.search).has('area'))changeURL('');closeOverlay('mapOverlay');closeOverlay('blockOverlay');closeOverlay('detailsOverlay');selectedId='';selectedBlock='';focusRoute(false);}
 function openOverlay(id){$(id).classList.add('open');$(id).setAttribute('aria-hidden','false');document.body.style.overflow='hidden';}
 function closeOverlay(id){$(id).classList.remove('open');$(id).setAttribute('aria-hidden','true');if(!document.querySelector('.overlay.open'))document.body.style.overflow='';}
 function setRemoveOptions(){const chosen=$('itemType').value,items=looseStockAt(selectedId);$('itemType').replaceChildren();$('itemType').append(new Option('Choose an asset',''));for(const s of items)$('itemType').append(new Option(`${s.item} (${fmt(s.quantity)} here)`,s.item));if(items.some(s=>s.item===chosen))$('itemType').value=chosen;else $('itemType').value=items.length===1?items[0].item:'';$('customWrap').classList.add('hidden');$('customItem').required=false;}
@@ -393,10 +394,10 @@ function renderBulk(){
  for(const item of [...totals.values()].sort((a,b)=>a.item.localeCompare(b.item))){const row=make('div','bulk-total-row');row.append(make('span','',item.item),make('strong','',fmt(item.quantity)));box.append(row);}
  $('bulkRemove').disabled=!valid.length||busy;
 }
-function refreshBulkBlockState(){for(const button of $('innerBlocks').children){const chosen=bulkSelected.has(button.dataset.block);button.classList.toggle('bulk-picked',chosen);button.setAttribute('aria-pressed',String(chosen));}renderBulk();}
+function refreshBulkBlockState(){for(const button of $('innerBlocks').querySelectorAll('.inner-block')){const chosen=bulkSelected.has(button.dataset.block);button.classList.toggle('bulk-picked',chosen);button.setAttribute('aria-pressed',String(chosen));}renderBulk();}
 function toggleBulkBlock(id){if(!bulkMode||!isOwner()||busy)return;if(!blockStockAt(selectedId,id).length)return;
  if(bulkSelected.has(id))bulkSelected.delete(id);else bulkSelected.add(id);setError('bulkError','');refreshBulkBlockState();}
-function startBulk(){if(!isOwner()||!state.blocksReady||busy)return;bulkMode=true;bulkSelected.clear();setError('bulkError','');renderBlockGrid(selectedId);}
+function startBulk(){if(!isOwner()||!state.blocksReady||busy)return;bulkMode=true;blockSelection.clear();focusedBlock='';blockAnchor='';bulkSelected.clear();setError('bulkError','');renderBlockGrid(selectedId);}
 function cancelBulk(){bulkMode=false;bulkSelected.clear();setError('bulkError','');renderBlockGrid(selectedId);}
 function selectAllBulk(){if(!bulkMode)return;const ids=blockIds(blockRows(selectedId),blockColumns(selectedId)).filter(id=>blockStockAt(selectedId,id).length);bulkSelected=new Set(ids);refreshBulkBlockState();}
 async function removeBulk(){
@@ -417,29 +418,152 @@ async function removeBulk(){
  }catch(err){setError('bulkError',err.message||'Bulk removal failed. Refresh and check stock.');renderBulk();}
  finally{$('bulkRemove').disabled=false;}
 }
-// Each warehouse area has independent, owner-configurable rows and columns.
+// Each area keeps its existing real block IDs. The view only changes their arrangement.
+function blockGroupSize(){return window.matchMedia('(max-width:650px)').matches?2:(document.documentElement.classList.contains('area-route')&&window.innerWidth>=1100?5:4);}
+function updateBlockViewControls(){
+ for(const [id,value] of [['blockViewLanes','lanes'],['blockViewCompact','compact']]){
+  $(id).classList.toggle('is-active',blockView===value);$(id).setAttribute('aria-pressed',String(blockView===value));
+ }
+ $('blockViewDesc').textContent=blockView==='lanes'?'Physical columns grouped to fit your screen — no sideways scrolling.':'All blocks in one responsive grid — quickest way to scan or edit.';
+}
+function switchBlockView(next){if(next===blockView)return;blockView=next;if(selectedId)renderBlockGrid(selectedId);}
+function refreshBlockSelection(){
+ const enabled=isOwner()&&!state.legacy&&state.blocksReady&&canHold(getArea(selectedId));
+ for(const button of $('innerBlocks').querySelectorAll('.inner-block')){
+  const id=button.dataset.block,chosen=enabled&&blockSelection.has(id);
+  button.classList.toggle('sheet-selected',chosen);
+  button.classList.toggle('sheet-focused',chosen&&focusedBlock===id);
+  if(!bulkMode)button.setAttribute('aria-pressed',String(chosen));
+ }
+ $('blockSheetToolbar').classList.toggle('hidden',!enabled||bulkMode);
+ const size=blockSelection.size,one=size===1,validFocus=Boolean(focusedBlock&&blockSelection.has(focusedBlock));
+ $('blockSelectionLabel').textContent=!size?'No blocks selected':size===1?`Block ${focusedBlock||[...blockSelection][0]}`:`${size} blocks selected · ${focusedBlock} active`;
+ $('blockClipboardLabel').textContent=blockClipboard?`${blockClipboard.blocks.length} block${blockClipboard.blocks.length===1?'':'s'} copied from ${blockClipboard.area}`:'Select a destination to paste';
+ $('blockCopySelection').disabled=!enabled||!size||busy;
+ $('blockPasteSelection').disabled=!enabled||!blockClipboard||!validFocus||busy;
+ $('blockEditSelection').disabled=!enabled||!one||busy;
+ $('blockDeselect').disabled=!size;
+}
+function chooseBlock(id,shift=false,additive=false){
+ if(!validBlock(selectedId,id))return;
+ if(shift&&(blockAnchor||focusedBlock)){
+  const a=blockCoordinates(blockAnchor||focusedBlock),b=blockCoordinates(id),ids=[];
+  for(let r=Math.min(a.row,b.row);r<=Math.max(a.row,b.row);r++)for(let c=Math.min(a.col,b.col);c<=Math.max(a.col,b.col);c++)ids.push(blockColumnLabel(c)+String(r).padStart(2,'0'));
+  blockSelection=new Set(additive?[...blockSelection,...ids]:ids);focusedBlock=id;
+ }else if(additive){if(blockSelection.has(id))blockSelection.delete(id);else blockSelection.add(id);focusedBlock=id;blockAnchor=id;}
+ else{blockSelection=new Set([id]);focusedBlock=id;blockAnchor=id;}
+ if(!blockSelection.has(focusedBlock))focusedBlock=[...blockSelection].at(-1)||'';if(!blockSelection.size)blockAnchor='';
+ refreshBlockSelection();
+}
+function focusBlockNode(id){
+ const node=[...$('innerBlocks').querySelectorAll('.inner-block')].find(x=>x.dataset.block===id);if(!node)return;
+ node.scrollIntoView({block:'nearest',inline:'nearest',behavior:'smooth'});node.focus({preventScroll:true});
+}
 function renderBlockGrid(areaId){
  const area=getArea(areaId),grid=$('innerBlocks');grid.replaceChildren();if(!area)return;
- const rows=blockRows(areaId),columns=blockColumns(areaId),total=state.blockStock.filter(s=>norm(s.areaId)===norm(areaId)&&s.quantity>0);$('blockFindStatus').textContent='';
- const compact=window.matchMedia('(max-width:650px)').matches;const minBlock=compact&&columns<=3?90:124;grid.style.gridTemplateColumns=`repeat(${columns},minmax(${minBlock}px,1fr))`;grid.style.width=compact&&columns<=3?'100%':'max-content';grid.style.minWidth=compact&&columns<=3?'100%':`max(100%,${columns*minBlock+(columns-1)*9}px)`;
+ const rows=blockRows(areaId),columns=blockColumns(areaId),compact=blockView==='compact';lastBlockGroupSize=blockGroupSize();
+ const byId=new Map();for(const stock of state.blockStock){if(norm(stock.areaId)!==norm(areaId)||stock.quantity<=0)continue;const list=byId.get(stock.blockId)||[];list.push(stock);byId.set(stock.blockId,list);}
+ grid.classList.toggle('compact-block-grid',compact);grid.classList.toggle('grouped-block-grid',!compact);
+ grid.style.removeProperty('grid-template-columns');grid.style.removeProperty('width');grid.style.removeProperty('min-width');
  $('blockMapCount').textContent=`${rows} rows × ${columns} columns · ${rows*columns} blocks`;
- $('blockAccessCaption').textContent=`Access from row ${rows} (N), working towards row 1. Tap a block to view its contents.`;
+ $('blockAccessCaption').textContent=`Row ${rows} is the access end. Select a block to edit or open it to view its contents.`;
  $('rowSettings').classList.toggle('hidden',!isOwner()||state.legacy||!canHold(area));
  $('blockRowCount').value=rows;$('blockColumnCount').value=columns;const hasStock=stockAt(areaId).length>0;$('clearWholeArea').classList.toggle('hidden',!isOwner()||state.legacy||!hasStock);$('areaClearReasonField').classList.toggle('hidden',!isOwner()||state.legacy||!hasStock);$('clearWholeArea').disabled=!hasStock;
- $('blocksDisabled').classList.toggle('hidden',canHold(area));
- $('blockGridWrap').classList.toggle('hidden',!canHold(area));
+ $('blocksDisabled').classList.toggle('hidden',canHold(area));$('blockWorkspace').classList.toggle('hidden',!canHold(area));
  if(!canHold(area)){renderBulk();return;}
- for(const id of blockIds(rows,columns)){
-  const contents=blockStockAt(areaId,id),lane=blockCoordinates(id).col;
-  const el=make('button','inner-block '+(contents.length?'filled ':'')+(lane%2===0?'lane-b':'lane-a')+(bulkMode&&bulkSelected.has(id)?' bulk-picked':''));
-  el.type='button';el.dataset.block=id;el.setAttribute('aria-label',`${areaId} block ${id}, ${contents.length} item types`);
+ updateBlockViewControls();
+ const createBlock=(id)=>{
+  const contents=byId.get(id)||[],lane=blockCoordinates(id).col;
+  const el=make('button','inner-block '+(contents.length?'filled ':'empty-block ')+(lane%2===0?'lane-b':'lane-a')+(bulkMode&&bulkSelected.has(id)?' bulk-picked':''));
+  el.type='button';el.dataset.block=id;el.setAttribute('aria-label',`${areaId} block ${id}: ${contents.length?contents.map(s=>`${s.item}, ${fmt(s.quantity)}`).join('; '):'empty'}`);
+  el.title=contents.length?contents.map(s=>`${s.item}: ${fmt(s.quantity)}`).join('\n'):'Empty block';
   el.append(make('strong','inner-id',id),make('span','inner-note',contents.length?contents.map(s=>`${s.item}: ${fmt(s.quantity)}`).join(' · '):'Empty'));
   el.setAttribute('aria-pressed',String(bulkMode&&bulkSelected.has(id)));if(bulkMode&&!contents.length)el.disabled=true;
-  el.onclick=()=>{if(Date.now()<ignoreClickUntil)return;bulkMode?toggleBulkBlock(id):openBlock(id);};if(isOwner()&&state.blocksReady&&contents.length)el.addEventListener('pointerdown',e=>beginBlockMove(e,areaId,id,el));grid.append(el);
+  el.onclick=e=>{if(Date.now()<ignoreClickUntil)return;if(bulkMode)toggleBulkBlock(id);else if(isOwner()&&state.blocksReady)chooseBlock(id,e.shiftKey,e.ctrlKey||e.metaKey);else openBlock(id);};
+  el.ondblclick=()=>{if(!bulkMode&&isOwner()&&state.blocksReady){blockSelection=new Set([id]);focusedBlock=id;blockAnchor=id;refreshBlockSelection();openBlock(id);}};
+  if(isOwner()&&state.blocksReady&&contents.length)el.addEventListener('pointerdown',e=>beginBlockMove(e,areaId,id,el));
+  return el;
+ };
+ if(compact){for(const id of blockIds(rows,columns))grid.append(createBlock(id));}
+ else{
+  const groupSize=lastBlockGroupSize;
+  for(let start=1;start<=columns;start+=groupSize){
+   const count=Math.min(groupSize,columns-start+1),end=start+count-1;
+   const section=make('section','block-lane-section'),heading=make('div','block-lane-heading');
+   heading.append(make('strong','',start===end?`COLUMN ${blockColumnLabel(start)}`:`COLUMNS ${blockColumnLabel(start)}–${blockColumnLabel(end)}`),make('span','',`${count} lane${count===1?'':'s'} · ${rows*count} blocks`));
+   const inner=make('div','block-lane-grid');inner.style.setProperty('--lane-columns',count);
+   for(let r=1;r<=rows;r++)for(let c=start;c<=end;c++)inner.append(createBlock(blockColumnLabel(c)+String(r).padStart(2,'0')));
+   section.append(heading,inner);grid.append(section);
+  }
  }
  const loose=looseStockAt(areaId),legacy=$('unassignedPanel');$('assignLoosePanel').classList.toggle('hidden',!isOwner()||!state.blocksReady||!loose.length);const dest=$('assignLooseTo'),prior=dest.value;dest.replaceChildren();dest.append(new Option('Choose target block',''));for(const id of blockIds(rows,columns))dest.append(new Option(`Block ${id}`,id));if([...dest.options].some(o=>o.value===prior))dest.value=prior;legacy.classList.toggle('hidden',!loose.length);
- renderBulk();
+ renderBulk();refreshBlockSelection();
  const wrap=$('unassignedContents');wrap.replaceChildren();for(const s of loose){const item=make('div','content-row');item.append(make('span','content-name',s.item),make('span','content-qty',fmt(s.quantity)));wrap.append(item);}
+}
+
+const BLOCK_COPY_KIND='AssetsAreaBlockCopyV1';
+function copyBlockSelection(clipboardEvent){
+ if(!isOwner()||!state.blocksReady||!selectedId||!blockSelection.size)return;
+ const ids=[...blockSelection].filter(id=>validBlock(selectedId,id));if(!ids.length)return;
+ const coords=ids.map(blockCoordinates),row=Math.min(...coords.map(v=>v.row)),col=Math.min(...coords.map(v=>v.col));
+ blockClipboard={kind:BLOCK_COPY_KIND,area:selectedId,originRow:row,originCol:col,blocks:ids.map((id,i)=>({row:coords[i].row-row,col:coords[i].col-col,from:id,items:blockStockAt(selectedId,id).map(s=>({item:s.item,quantity:s.quantity}))}))};
+ const text=JSON.stringify(blockClipboard);
+ if(clipboardEvent?.clipboardData){clipboardEvent.clipboardData.setData('text/plain',text);clipboardEvent.preventDefault();}
+ else if(navigator.clipboard?.writeText)void navigator.clipboard.writeText(text).catch(()=>{});
+ refreshBlockSelection();toast(`Copied ${ids.length} block${ids.length===1?'':'s'}. Select a destination, then paste.`);
+}
+function isValidClipboard(data){
+ return Boolean(data&&data.kind===BLOCK_COPY_KIND&&typeof data.area==='string'&&data.area.length<=40&&Array.isArray(data.blocks)&&data.blocks.length>0&&data.blocks.length<=1560&&data.blocks.every(b=>Number.isInteger(b.row)&&b.row>=0&&b.row<30&&Number.isInteger(b.col)&&b.col>=0&&b.col<52&&typeof b.from==='string'&&Array.isArray(b.items)&&b.items.length<=200&&b.items.every(s=>typeof s.item==='string'&&s.item.length>0&&s.item.length<=90&&Number.isSafeInteger(s.quantity)&&s.quantity>0&&s.quantity<=99999999)));
+}
+function pasteBlockSelection(raw=''){
+ if(!isOwner()||busy||!selectedId||!focusedBlock||!validBlock(selectedId,focusedBlock)||bulkMode)return;
+ let clip=blockClipboard;
+ if(raw){try{const parsed=JSON.parse(raw);if(isValidClipboard(parsed)){clip=parsed;blockClipboard=parsed;}}catch{}}
+ if(!isValidClipboard(clip)){toast('Copy blocks first (Ctrl/Cmd+C), then select where to paste.');return;}
+ const area=selectedId,origin=blockCoordinates(focusedBlock),moves=clip.blocks.map(b=>({id:blockColumnLabel(origin.col+b.col)+String(origin.row+b.row).padStart(2,'0'),from:b.from,items:b.items.map(i=>({...i}))}));
+ if(moves.some(v=>!validBlock(area,v.id))){toast('The copied range does not fit. Select a destination further up or left.');return;}
+ const targets=[...new Set(moves.map(m=>m.id))];if(targets.length!==moves.length){toast('Invalid copied range.');return;}
+ const altered=moves.filter(m=>!sameBlockStock(m.items,blockStockAt(area,m.id)));
+ if(!altered.length){toast('Destination already matches the copied blocks.');return;}
+ const occupied=altered.filter(m=>blockStockAt(area,m.id).length);
+ const totalAdded=altered.reduce((n,m)=>n+m.items.reduce((v,x)=>v+x.quantity,0),0);
+ const desc=`Paste ${clip.blocks.length} copied block${clip.blocks.length===1?'':'s'} from ${clip.area} starting at ${area}/${focusedBlock}?\n\nThis REPLACES the stock in ${altered.length} destination block${altered.length===1?'':'s'} (it does not move or change the sources).${occupied.length?`\n\n${occupied.length} destination block${occupied.length===1?' already contains':'s already contain'} stock, which will be overwritten.`:''}\n\nCopied quantity: ${fmt(totalAdded)}. Every change will be logged.`;
+ if(!confirm(desc))return;
+ const sourceArea=clip.area;
+ void (async()=>{try{
+  await transactBlockStock(altered.map(m=>[area,m.id]),current=>{
+   for(const m of altered){const target=current.get(blockKey(area,m.id));target.clear();for(const item of m.items)target.set(norm(item.item),{areaId:area,blockId:m.id,item:item.item,quantity:item.quantity});}
+  },(before,stamp)=>altered.flatMap(m=>{
+   const old=before.get(blockKey(area,m.id)),newRows=new Map(m.items.map(i=>[norm(i.item),i]));const changes=[];
+   for(const k of new Set([...old.keys(),...newRows.keys()])){const prior=old.get(k),next=newRows.get(k),difference=(next?.quantity||0)-(prior?.quantity||0);if(!difference)continue;
+    changes.push({timestamp:stamp,action:difference>0?'Add (paste)':'Remove (paste)',item:next?.item||prior.item,quantity:Math.abs(difference),from:difference<0?`${area}/${m.id}`:'',to:difference>0?`${area}/${m.id}`:'',note:`Copied from ${sourceArea}/${m.from} to ${area}/${m.id} · Replaced destination contents`,reason:'Block copy / paste'});
+   }return changes;
+  }));
+  blockSelection=new Set(moves.map(m=>m.id));focusedBlock=moves[0].id;blockAnchor=focusedBlock;refreshBlockSelection();toast(`Pasted ${moves.length} block${moves.length===1?'':'s'}. Source stock unchanged.`);
+ }catch(err){toast(err.message||'Paste failed. Refresh and check stock.');}})();
+}
+async function saveBlockQuantities(e){
+ e.preventDefault();if(!isOwner()||busy||!selectedBlock)return;
+ const area=selectedId,id=selectedBlock,rows=[...$('blockQuantityRows').querySelectorAll('input[data-item]')],updated=new Map();
+ for(const input of rows){const value=Number(input.value),item=input.dataset.item;if(!Number.isSafeInteger(value)||value<0||value>99999999){setError('blockQtyEditError',`Enter a valid quantity for ${item}.`);input.focus();return;}updated.set(norm(item),{item,quantity:value});}
+ const before=blockStockAt(area,id),changes=before.map(item=>({...item,after:updated.get(norm(item.item))?.quantity??0})).filter(v=>v.after!==v.quantity);
+ if(!changes.length){toast('No quantities changed.');return;}
+ const reason=$('blockReason').value.trim();setError('blockQtyEditError','');$('saveBlockQuantities').disabled=true;
+ try{
+  await transactBlockStock([[area,id]],current=>{
+   const values=current.get(blockKey(area,id));for(const [key,updatedItem] of updated){const existing=values.get(key);if(existing)values.set(key,{...existing,quantity:updatedItem.quantity});}
+  },(_previous,stamp)=>changes.map(item=>({timestamp:stamp,action:item.after>item.quantity?'Add (edit)':'Remove (edit)',item:item.item,quantity:Math.abs(item.after-item.quantity),from:item.after<item.quantity?`${area}/${id}`:'',to:item.after>item.quantity?`${area}/${id}`:'',note:`Direct quantity edit${reason?' · '+reason:''}`,reason})));
+  $('blockReason').value='';renderBlockDetails();
+ }catch(err){setError('blockQtyEditError',err.message||'Could not save quantity changes.');}finally{$('saveBlockQuantities').disabled=false;}
+}
+function blockKeyboard(e){
+ if(!isOwner()||!state.blocksReady||!$('detailsOverlay').classList.contains('open')||$('blockOverlay').classList.contains('open')||$('mapOverlay').classList.contains('open')||$('editorOverlay').classList.contains('open')||bulkMode)return;
+ if(e.target.closest('input,textarea,select,[contenteditable="true"]'))return;
+ if(!focusedBlock)return;
+ if(e.key==='Enter'&&blockSelection.size===1){e.preventDefault();openBlock(focusedBlock);return;}
+ const movement={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0]}[e.key];if(!movement)return;
+ const current=blockCoordinates(focusedBlock),col=current.col+movement[0],row=current.row+movement[1];if(col<1||col>blockColumns(selectedId)||row<1||row>blockRows(selectedId))return;
+ e.preventDefault();const id=blockColumnLabel(col)+String(row).padStart(2,'0');chooseBlock(id,e.shiftKey,false);focusBlockNode(id);
 }
 function clearBlockMove(){
  clearTimeout(blockMoveTimer);blockMoveTimer=0;
@@ -492,7 +616,7 @@ async function movePickedBlocks(area,sources,destination){
  }catch(err){toast(err.message||'Could not move selected blocks.');}
 }
 function findBlock(){const id=String($('blockFind').value||'').trim().toUpperCase(),status=$('blockFindStatus');if(!validBlock(selectedId,id)){status.textContent='That block is not in this area.';return;}
- const node=Array.from($('innerBlocks').children).find(el=>el.dataset.block===id);if(!node)return;const scroll=$('innerGridScroll');scroll.scrollLeft=Math.max(0,node.offsetLeft-scroll.offsetLeft-scroll.clientWidth/2+node.clientWidth/2);scroll.scrollTop=Math.max(0,node.offsetTop-scroll.offsetTop-80);node.classList.add('block-found');node.focus({preventScroll:true});status.textContent=`Showing ${id}`;setTimeout(()=>node.classList.remove('block-found'),2400);}
+ const node=Array.from($('innerBlocks').querySelectorAll('.inner-block')).find(el=>el.dataset.block===id);if(!node)return;node.scrollIntoView({behavior:'smooth',block:'center',inline:'nearest'});node.classList.add('block-found');node.focus({preventScroll:true});if(isOwner()&&!bulkMode){chooseBlock(id);}status.textContent=`Showing ${id}`;setTimeout(()=>node.classList.remove('block-found'),2400);}
 function renderFocusMap(){const board=$('focusMapBoard'),areas=activeAreas(),rows=Math.max(MIN_R,...areas.map(a=>a.y+a.h+1));board.style.setProperty('--cols',C);board.style.setProperty('--rows',Math.min(MAX_R,rows));board.replaceChildren();applyMapSize('focusMapBoard');const here=getArea(selectedId);$('mapHereCaption').textContent=here?`${here.name} (${here.id})`:'Choose an area';
  for(const a of areas){const selected=here&&norm(here.id)===norm(a.id),inventory=stockAt(a.id),special=!canHold(a),el=make('button','map-block color-'+a.color+(inventory.length?' occupied':'')+(special?' special':'')+(selected?' map-current':''));el.type='button';el.dataset.id=a.id;el.style.gridColumn=`${a.x} / span ${a.w}`;el.style.gridRow=`${a.y} / span ${a.h}`;el.setAttribute('aria-label',`${a.type}: ${a.name}, ${a.id}${selected?', your current area':''}`);el.title=`${a.type} · ${a.name}`;if(special)el.append(make('span','marker-symbol',markerSymbols[norm(a.type)]||'✦'));el.append(make('span','block-id',a.id),make('span','block-name',a.name));if(selected){const marker=make('span','you-are-here');marker.append(make('span','here-dot'),document.createTextNode('YOU ARE HERE'));el.append(marker);}else el.append(make('span','block-status',special?a.type:inventory.length?`${inventory.length} types stored`:'Empty'));el.onclick=()=>{closeOverlay('mapOverlay');if(selected)return;closeOverlay('blockOverlay');openDetails(a.id);};board.append(el);}
 }
@@ -524,6 +648,13 @@ function renderBlockDetails(){
  if([...sel.options].some(o=>o.value===chosen))sel.value=chosen;
  $('blockCustomWrap').classList.toggle('hidden',sel.value!=='__other__'||$('blockAction').value==='remove');
  $('blockCustom').required=sel.value==='__other__'&&$('blockAction').value==='add';
+ const editForm=$('blockQuantitiesForm'),rows=$('blockQuantityRows');rows.replaceChildren();
+ editForm.classList.toggle('hidden',!enabled||!items.length);setError('blockQtyEditError','');
+ for(const stock of items){
+  const label=make('label','block-quantity-row'),name=make('span','',stock.item),input=make('input');
+  input.type='number';input.min='0';input.max='99999999';input.step='1';input.inputMode='numeric';input.value=String(stock.quantity);input.dataset.item=stock.item;input.setAttribute('aria-label',`Set ${stock.item} quantity`);
+  label.append(name,input);rows.append(label);
+ }
  const dest=$('blockTo'),prior=dest.value;dest.replaceChildren();dest.append(new Option('Select destination block',''));
  for(const other of blockIds(blockRows(selectedId),blockColumns(selectedId)))if(other!==selectedBlock)dest.append(new Option(`Block ${other}`,other));
  if([...dest.options].some(o=>o.value===prior))dest.value=prior;
@@ -707,15 +838,18 @@ async function clearEntireArea(areaId,reason=''){
 
 function signIn(){if(!cfg.OAUTH_CLIENT_ID||!cfg.OWNER_EMAIL){toast('Manager login is not configured.');return;}if(!gisReady||!window.google?.accounts?.oauth2){toast('Google sign-in is loading. Try again.');return;}
  if(!tokenClient)tokenClient=google.accounts.oauth2.initTokenClient({client_id:cfg.OAUTH_CLIENT_ID,scope:'openid email https://www.googleapis.com/auth/spreadsheets',callback:async r=>{if(!r.access_token){toast('Sign-in was cancelled.');return;}const candidate=r.access_token;try{const response=await fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{Authorization:'Bearer '+candidate}});if(!response.ok)throw new Error('Could not verify Google account.');const who=await response.json();if(!who.email_verified||norm(who.email)!==norm(cfg.OWNER_EMAIL))throw new Error('This account does not have manager access.');token=candidate;ownerEmail=who.email;mode='owner';render();toast('Manager editing unlocked.');}catch(err){token='';ownerEmail='';mode='viewer';render();toast(err.message);}}});tokenClient.requestAccessToken({prompt:'select_account'});}
-function signOut(){bulkMode=false;bulkSelected.clear();clearStockDrag();clearBlockMove();token='';ownerEmail='';mode='viewer';designing=false;drawingTool='select';closeEditor();render();connection('Live · view only','live');toast('Editing locked.');}
+function signOut(){bulkMode=false;bulkSelected.clear();blockSelection.clear();focusedBlock='';blockAnchor='';blockClipboard=null;clearStockDrag();clearBlockMove();token='';ownerEmail='';mode='viewer';designing=false;drawingTool='select';closeEditor();render();connection('Live · view only','live');toast('Editing locked.');}
 function initialise(){
  $('warehouseTab').onclick=()=>showMainView('warehouse');$('transactionsTab').onclick=()=>showMainView('transactions');
  $('transactionType').onchange=()=>{transactionLimit=50;renderBlockTransactions();};$('transactionSearch').oninput=()=>{transactionLimit=50;renderBlockTransactions();};$('transactionsMore').onclick=()=>{transactionLimit+=50;renderBlockTransactions();};
  document.addEventListener('pointermove',moveBlockPointer,{passive:false});document.addEventListener('pointerup',finishBlockPointer);document.addEventListener('pointercancel',clearBlockMove);
  $('findForm').onsubmit=findAssets; $('findItem').addEventListener('change',()=>{findRequest=null;$('findResult').classList.add('hidden');});$('findQty').addEventListener('input',()=>{findRequest=null;$('findResult').classList.add('hidden');});
+ window.addEventListener('copy',e=>{if(isOwner()&&blockSelection.size&&$('detailsOverlay').classList.contains('open')&&!$('blockOverlay').classList.contains('open')&&!e.target.closest('input,textarea,select,[contenteditable="true"]'))copyBlockSelection(e);});
+ window.addEventListener('paste',e=>{if(!isOwner()||!focusedBlock||!$('detailsOverlay').classList.contains('open')||$('blockOverlay').classList.contains('open')||e.target.closest('input,textarea,select,[contenteditable="true"]'))return;const raw=e.clipboardData?.getData('text/plain')||'';if(raw){try{if(isValidClipboard(JSON.parse(raw))){e.preventDefault();pasteBlockSelection(raw);}}catch{}}});
+ $('blockViewLanes').onclick=()=>switchBlockView('lanes');$('blockViewCompact').onclick=()=>switchBlockView('compact');$('blockCopySelection').onclick=()=>copyBlockSelection();$('blockPasteSelection').onclick=()=>pasteBlockSelection();$('blockEditSelection').onclick=()=>{if(blockSelection.size===1&&focusedBlock)openBlock(focusedBlock);};$('blockDeselect').onclick=()=>{blockSelection.clear();focusedBlock='';blockAnchor='';refreshBlockSelection();};$('blockQuantitiesForm').onsubmit=saveBlockQuantities;window.addEventListener('keydown',blockKeyboard);
  $('bulkStart').onclick=startBulk;$('bulkCancel').onclick=cancelBulk;$('bulkSelectAll').onclick=selectAllBulk;$('bulkRemove').onclick=removeBulk;
  $('areaFindAction').onclick=()=>{openWarehouseOverview();requestAnimationFrame(()=>$('findPanel').scrollIntoView({behavior:'smooth',block:'start'}));};
- $('enableBlocks').onclick=enableBlockStorage;$('saveBlockGrid').onclick=saveBlockGrid;$('blockFindGo').onclick=findBlock;$('blockFind').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findBlock();}});$('areaOwnerButton').onclick=()=>isOwner()?signOut():signIn();$('openAreaMap').onclick=showAreaMap;$('closeMap').onclick=()=>closeOverlay('mapOverlay');$('returnArea').onclick=()=>closeOverlay('mapOverlay');$('warehouseOverview').onclick=openWarehouseOverview;$('mapOverlay').addEventListener('click',e=>{if(e.target===$('mapOverlay'))closeOverlay('mapOverlay');});$('closeBlock').onclick=()=>closeBlock();$('doneBlock').onclick=()=>closeBlock();$('blockForm').onsubmit=submitBlockStock;$('blockClear').onclick=clearBlock;$('blockMove').onclick=transferBlock;$('blockAction').onchange=renderBlockDetails;$('blockItem').onchange=renderBlockDetails;$('blockOverlay').addEventListener('click',e=>{if(e.target===$('blockOverlay'))closeBlock();});$('copyBlockLink').onclick=async()=>{const link=blockLink(selectedId,selectedBlock);try{await navigator.clipboard.writeText(link);toast('Block link copied.');}catch{prompt('Copy block link:',link);}};$('ownerButton').onclick=()=>isOwner()?signOut():signIn();$('refresh').onclick=()=>loadData();$('setupButton').onclick=setupWarehouse;$('designButton').onclick=()=>{designing=!designing;drawingTool='select';render();};$('addAreaButton').onclick=()=>openAreaEditor();$('clearFilter').onclick=()=>{filterItem='';render();};$('search').addEventListener('input',renderList);document.querySelectorAll('[data-draw-tool]').forEach(button=>button.onclick=()=>{drawingTool=button.dataset.drawTool;syncDrawingPalette();$('board').classList.toggle('drawing-tool',drawingTool!=='select');});for(const [id,which,delta] of [['mapZoomOut','board',-1],['mapZoomIn','board',1],['mapZoomFit','board',0],['focusZoomOut','focusMapBoard',-1],['focusZoomIn','focusMapBoard',1],['focusZoomFit','focusMapBoard',0]])$(id).onclick=()=>adjustMapZoom(which,delta);window.addEventListener('resize',()=>{applyMapSize('board');applyMapSize('focusMapBoard');});
+ $('enableBlocks').onclick=enableBlockStorage;$('saveBlockGrid').onclick=saveBlockGrid;$('blockFindGo').onclick=findBlock;$('blockFind').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();findBlock();}});$('areaOwnerButton').onclick=()=>isOwner()?signOut():signIn();$('openAreaMap').onclick=showAreaMap;$('closeMap').onclick=()=>closeOverlay('mapOverlay');$('returnArea').onclick=()=>closeOverlay('mapOverlay');$('warehouseOverview').onclick=openWarehouseOverview;$('mapOverlay').addEventListener('click',e=>{if(e.target===$('mapOverlay'))closeOverlay('mapOverlay');});$('closeBlock').onclick=()=>closeBlock();$('doneBlock').onclick=()=>closeBlock();$('blockForm').onsubmit=submitBlockStock;$('blockClear').onclick=clearBlock;$('blockMove').onclick=transferBlock;$('blockAction').onchange=renderBlockDetails;$('blockItem').onchange=renderBlockDetails;$('blockOverlay').addEventListener('click',e=>{if(e.target===$('blockOverlay'))closeBlock();});$('copyBlockLink').onclick=async()=>{const link=blockLink(selectedId,selectedBlock);try{await navigator.clipboard.writeText(link);toast('Block link copied.');}catch{prompt('Copy block link:',link);}};$('ownerButton').onclick=()=>isOwner()?signOut():signIn();$('refresh').onclick=()=>loadData();$('setupButton').onclick=setupWarehouse;$('designButton').onclick=()=>{designing=!designing;drawingTool='select';render();};$('addAreaButton').onclick=()=>openAreaEditor();$('clearFilter').onclick=()=>{filterItem='';render();};$('search').addEventListener('input',renderList);document.querySelectorAll('[data-draw-tool]').forEach(button=>button.onclick=()=>{drawingTool=button.dataset.drawTool;syncDrawingPalette();$('board').classList.toggle('drawing-tool',drawingTool!=='select');});for(const [id,which,delta] of [['mapZoomOut','board',-1],['mapZoomIn','board',1],['mapZoomFit','board',0],['focusZoomOut','focusMapBoard',-1],['focusZoomIn','focusMapBoard',1],['focusZoomFit','focusMapBoard',0]])$(id).onclick=()=>adjustMapZoom(which,delta);window.addEventListener('resize',()=>{applyMapSize('board');applyMapSize('focusMapBoard');if(selectedId&&blockView==='lanes'&&lastBlockGroupSize!==blockGroupSize())renderBlockGrid(selectedId);});
  $('closeDetails').onclick=()=>closeDetails();$('doneDetails').onclick=()=>closeDetails();$('closeEditor').onclick=closeEditor;
  $('detailsOverlay').addEventListener('click',e=>{if(e.target===$('detailsOverlay'))closeDetails();});$('editorOverlay').addEventListener('click',e=>{if(e.target===$('editorOverlay'))closeEditor();});
  $('copyLink').onclick=async()=>{const url=areaURL(selectedId);try{if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(url);else {const el=make('textarea');el.value=url;document.body.append(el);el.select();document.execCommand('copy');el.remove();}$('linkStatus').textContent='Copied!';}catch{prompt('Copy this area link:',url);}};
